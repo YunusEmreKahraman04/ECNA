@@ -1,0 +1,1566 @@
+--- PDF ---
+SOFTWARE DESIGN DOCUMENT (SDD)
+EV CHAR GING NE TWORK APP (ECNA)
+T.C. KONY A FOOD AND A GRICUL TURE UNIVERSIT Y
+Faculty o f Engineering and Ar chitectur e
+Department o f Comput er Engineering
+Project T eam:
+Emre Erkut – 222010020156
+Keramettin Kutnu – 222010020155
+Yunus Emr e Kahraman – 222010020157
+Super visor : Prof. Dr. Melt em Huri Baturay
+Document V ersion:  1.0
+Date: Nov ember 2025
+TABLE OF C ONTENTS
+1. Introduction
+2. System Ov erview
+3. System Ar chitectur e
+4. Detailed Design
+5. Datab ase Design
+6. API Design
+7. User Int erface Design
+8. Security Design
+9. IoT Int egration Design
+10. Performance R equir ements
+11. Deployment Ar chitectur e
+12. Testing S trategy
+13. References
+1. INTR ODUCTION
+1.1 Purpose
+This So ftware Design Document (SDD) pr ovides a compr ehensiv e description o f the design for the EV Char ging
+Netw ork App (ECNA). The document specifies the ar chitectural design, component structur e, datab ase schema, API
+interfaces, security mechanisms, and int egration strat egies for the syst em.
+1.2 Scope
+The ECNA syst em is a mobile application platfor m that enables electric v ehicle user s to locat e, reserve, and p ay for
+charging stations efficiently . The syst em int egrat es IoT-enabled r eal-time data collection with cloud-b ased ser vices t o
+optimize station av ailability and r educe waiting times.
+This document cov ers:
+System ar chitectur e and component design
+Frontend and b ackend module specifications
+Datab ase schema and data models
+REST ful API endpoints
+User int erface design principles
+Security mechanisms and authentication
+IoT int egration via MQ TT protocol
+Payment gat eway int egration
+Deployment and scalability considerations
+1.3 Definitions, Acronyms, and Abbreviations
+ECNA : EV Char ging Netw ork App
+EV: Electric V ehicle
+IoT: Internet o f Things
+MQTT: Message Queuing T elemetr y Transpor t
+API: Application Pr ogramming Int erface
+JWT: JSON W eb Token
+FCM : Firebase Cloud Messaging
+OAuth : Open Authorization
+REST : Representational S tate Transfer
+SDK: Software Dev elopment Kit
+SDD: Software Design Document
+1.4 References
+International Ener gy Agency (IE A). (2023). Glob al EV Outlook 2023: Cat ching up with climat e ambitions. P aris:
+IEA Publications.
+Azzop ardi, B., & Gan, C. K. (2022). Smar t Char ging Infrastructur e for Electric V ehicles: Int egration with Smar t
+Grids and R enewable Ener gy Systems. R enewable and Sustainable Ener gy Reviews, 161, 112357.
+Shukla, A., & J ain, S. (2021). Cloud-Based IoT Ar chitectur e for Electric V ehicle Char ging Netw ork
+Management. IEEE Access, 9, 77154–77165.
+Firebase Documentation: https://fir ebase.google.com/docs
+React Nativ e Documentation: https://r eactnativ e.dev/docs/getting-star ted
+Stripe API Documentation: https://stripe.com/docs/api
+2. SY STEM OVERVIE W
+2.1 System Purpose
+The EV Char ging Netw ork App aims t o addr ess the challenges in EV infrastructur e management by pr oviding:
+1. Real-time S tation Discov ery: User s can locat e nearby char ging stations with liv e availability status
+2. Reservation Management : Adv anced booking syst em to reduce waiting times
+3. Secur e Payment Pr ocessing : Integrat ed payment gat eway for seamless transactions
+4. IoT Int egration : Real-time data synchr onization fr om char ging station sensor s
+5. Administrativ e Dashbo ard: Analy tics and monit oring t ools for station operat ors
+2.2 System Context
+The ECNA syst em operat es within a lar ger ecosyst em comprising:
+Mobile Applications  (iOS/Andr oid): User -facing applications built with R eact Nativ e
+Back end API Ser ver: Node.js/Expr ess.js REST ful API
+Cloud Datab ase: Firebase Fir estore for data st orage
+Authentication Ser vice: Firebase Authentication
+Payment Gat eway : Stripe p ayment pr ocessing
+MQTT Broker: Real-time IoT communication
+IoT Devices : Char ging station sensor s and contr ollers
+External Ser vices : Google Maps API, Google Places API
+2.3 User Classes and Characteristics
+The syst em ser ves tw o primar y user classes:
+1. EV User s
+Primar y user s seeking char ging ser vices
+Requir e intuitiv e mobile int erface
+Need r eal-time infor mation and quick r eservation pr ocess
+Expect secur e payment pr ocessing
+2. Administrat ors
+Station operat ors and netw ork manager s
+Requir e analy tics and monit oring cap abilities
+Need t o manage station data and av ailability
+Monit or syst em per formance and user statistics
+2.4 Operating Environment
+Mobile Platfor ms: iOS 13.0+, Andr oid 8.0+
+Back end Ser ver: Node.js 16+, Expr ess.js 4.18+
+Cloud Platfor m: Firebase (Fir estore, Authentication, Cloud Messaging)
+Payment Pr ocessing : Stripe API
+IoT Pr otocol: MQ TT 3.1.1+
+Maps Ser vice: Google Maps Platfor m
+3. SY STEM AR CHITECTURE
+3.1 High-Level Architecture
+The ECNA syst em follows a thr ee-tier ar chitectur e pattern:
+┌─────────────────────────────────────────────────────────┐
+│                    PRESENTATION LAYER                    │
+│  ┌──────────────┐          ┌──────────────┐            │
+│  │  iOS/Android │          │   Web Admin  │            │
+│  │ React Native │          │   Dashboard  │            │
+│  │   (Expo)     │          │  (Future)    │            │
+│  └──────────────┘          └──────────────┘            │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          │ HTTPS/REST API
+                          │
+┌─────────────────────────────────────────────────────────┐
+│                     APPLICATION LAYER                    │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │         Node.js + Express.js Backend API        │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐     │   │
+│  │  │   Auth   │  │ Stations │  │ Reserv.  │     │   │
+│  │  │  Module  │  │  Module  │  │  Module  │     │   │
+│  │  └──────────┘  └──────────┘  └──────────┘     │   │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐     │   │
+│  │  │ Payments │  │   MQTT   │  │  Admin   │     │   │
+│  │  │  Module  │  │  Module  │  │  Module  │     │   │
+│  │  └──────────┘  └──────────┘  └──────────┘     │   │
+│  └─────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+                          │
+        ┌─────────────────┼─────────────────┐
+        │                 │                 │
+┌───────▼──────┐  ┌───────▼──────┐  ┌───────▼──────┐
+│   Firebase   │  │   Stripe API │  │  MQTT Broker │
+│  (Firestore, │  │              │  │              │
+│    Auth,     │  │              │  │              │
+│     FCM)     │  │              │  │              │
+└──────────────┘  └──────────────┘  └──────────────┘
+                          │
+                  ┌───────▼──────┐
+                  │  IoT Devices │
+                  │  (Stations)  │
+                  └──────────────┘
+3.2 Architectural Patterns
+The syst em employs the following ar chitectural p atterns:
+1. MVC (Model-View-Contr oller) : Frontend sep arates pr esentation (Views/Scr eens) fr om business logic
+(Services)
+2. REST ful API : Back end follows REST principles for stat eless communication
+3. Micr oservices-inspir ed: Modular b ackend structur e with sep arate route handler s
+4. Event-Driven Ar chitectur e: MQ TT-based r eal-time updat es using publish-subscribe p attern
+5. Layered Ar chitectur e: Clear sep aration betw een pr esentation, application, and data lay ers
+3.3 Component Architecture
+3.3.1 Fr ontend Components
+The R eact Nativ e frontend is or ganized int o the following modules:
+frontend/
+├── App.tsx                    # Main application entry point
+├── src/
+│   ├── screens/               # Presentation Layer
+│   │   ├── LoginScreen.tsx
+│   │   ├── RegisterScreen.tsx
+│   │   ├── HomeScreen.tsx
+│   │   ├── MapScreen.tsx
+│   │   ├── StationDetailsScreen.tsx
+│   │   ├── ReservationScreen.tsx
+│   │   ├── PaymentScreen.tsx
+│   │   └── ProfileScreen.tsx
+│   ├── services/              # Business Logic Layer
+│   │   ├── AuthService.tsx
+│   │   ├── FirebaseService.ts
+│   │   ├── MQTTService.ts
+│   │   ├── PaymentService.ts
+│   │   └── NotificationService.ts
+│   ├── types/                 # Data Models
+│   │   └── index.ts
+│   ├── utils/                 # Utility Functions
+│   │   └── helpers.ts
+│   └── config.ts              # Configuration
+3.3.2 Back end Components
+The Node.js b ackend is structur ed as follows:
+backend/
+├── src/
+│   ├── server.js              # Express server setup
+│   ├── routes/                # Route Handlers
+│   │   ├── auth.js
+│   │   ├── stations.js
+│   │   ├── reservations.js
+│   │   ├── payments.js
+│   │   └── mqtt.js
+│   ├── middleware/            # Middleware Functions
+│   │   └── auth.js
+│   ├── config/                # Configuration
+│   │   └── firebase.js
+│   └── utils/                 # Utility Functions
+│       └── errors.js
+4. DE TAILED DESIGN
+4.1 Frontend Module Design
+4.1.1 Authentication Module
+Purpose : Handle user authentication and session management
+Components :
+AuthService.tsx: Authentication ser vice wrapper
+LoginScreen.tsx: User login int erface
+RegisterScreen.tsx: User r egistration int erface
+Key Functions :
+register(email, password, displayName): Create new user account
+login(email, password): Authenticat e user and cr eate session
+logout(): Terminat e user session
+getCurrentUser(): Retriev e curr ent authenticat ed user
+Dependencies : Firebase Authentication SDK
+4.1.2 S tation Discov ery Module
+Purpose : Enable user s to find and view char ging stations
+Components :
+HomeScreen.tsx: Station list view
+MapScreen.tsx: Interactiv e map with station mark ers
+StationDetailsScreen.tsx: Detailed station infor mation
+FirebaseService.ts: Datab ase operations
+Key Functions :
+getNearbyStations(latitude, longitude, radius): Quer y stations by location
+getStationById(id): Retriev e station details
+subscribeToStationUpdates(stationId, callback): Real-time status updat es
+Dependencies : Firebase Fir estore, React Nativ e Maps, Google Places API
+4.1.3 R eservation Module
+Purpose : Manage char ging station r eservations
+Components :
+ReservationScreen.tsx: Create and manage r eservations
+FirebaseService.ts: Reservation data operations
+Key Functions :
+createReservation(stationId, connectorId, startTime, endTime): Create new r eservation
+getUserReservations(userId): Retriev e user' s reservations
+updateReservationStatus(reservationId, status): Updat e reservation stat e
+cancelReservation(reservationId): Cancel existing r eservation
+Dependencies : Firebase Fir estore, Back end API
+4.1.4 P ayment Module
+Purpose : Process secur e payment transactions
+Components :
+PaymentScreen.tsx: Payment int erface
+PaymentService.ts: Stripe int egration
+Key Functions :
+createPaymentIntent(amount, currency): Initialize p ayment
+confirmPayment(paymentIntentId, paymentMethod): Complet e transaction
+getPaymentHistory(userId): Retriev e transaction hist ory
+Dependencies : Stripe R eact Nativ e SDK , Back end API
+4.1.5 R eal-time Updat es Module
+Purpose : Synchr onize r eal-time data fr om IoT devices
+Components :
+MQTTService.ts: MQ TT client implementation
+NotificationService.ts: Push notification handler
+Key Functions :
+connect(brokerUrl, options): Establish MQ TT connection
+subscribe(topic, callback): Subscribe t o station updat es
+publish(topic, message): Publish commands t o devices
+handleNotification(payload): Process FCM notifications
+Dependencies : MQ TT.js, Fir ebase Cloud Messaging
+4.2 Backend Module Design
+4.2.1 Authentication Module
+Purpose : Verify user identity and manage authorization
+Components :
+routes/auth.js: Authentication endpoints
+middleware/auth.js: JWT verification middlewar e
+Endpoints :
+POST /api/auth/register: Regist er new user
+GET /api/auth/me: Get curr ent user pr ofile
+PUT /api/auth/me: Updat e user pr ofile
+Key Functions :
+verifyToken(req, res, next): Validat e JW T token
+registerUser(email, password, displayName): Create user account
+getUserProfile(userId): Retriev e user data
+Dependencies : Firebase Admin SDK , Expr ess.js
+4.2.2 S tation Management Module
+Purpose : Manage char ging station data and av ailability
+Components :
+routes/stations.js: Station endpoints
+Endpoints :
+GET /api/stations: Get all stations (with filt ers)
+GET /api/stations/:id: Get station by ID
+PUT /api/stations/:id/availability: Updat e availability (IoT)
+Key Functions :
+getStations(latitude, longitude, radius): Quer y stations
+updateStationAvailability(stationId, data): Updat e status
+validateStationData(data): Input v alidation
+Dependencies : Firebase Fir estore, Expr ess V alidat or
+4.2.3 R eservation Management Module
+Purpose : Handle r eservation cr eation and management
+Components :
+routes/reservations.js: Reservation endpoints
+Endpoints :
+GET /api/reservations: Get user' s reservations
+POST /api/reservations: Create reservation
+PUT /api/reservations/:id: Updat e reservation
+Key Functions :
+createReservation(userId, stationId, connectorId, times): Create reservation
+checkAvailability(stationId, startTime, endTime): Validat e slot
+calculateCost(station, duration): Comput e pricing
+Dependencies : Firebase Fir estore, Dat e/time utilities
+4.2.4 P ayment Pr ocessing Module
+Purpose : Integrat e with S tripe for secur e payments
+Components :
+routes/payments.js: Payment endpoints
+Endpoints :
+POST /api/payments/create-intent: Create payment int ent
+POST /api/payments/confirm: Confir m payment
+Key Functions :
+createPaymentIntent(amount, currency, metadata): Initialize p ayment
+confirmPayment(paymentIntentId): Process transaction
+handleWebhook(event): Process S tripe w ebhooks (futur e)
+Dependencies : Stripe SDK , Firebase Fir estore
+4.2.5 IoT Int egration Module
+Purpose : Manage MQ TT communication with IoT devices
+Components :
+routes/mqtt.js: MQ TT endpoints
+MQTT client instance
+Endpoints :
+POST /api/mqtt/publish/:stationId: Publish command
+GET /api/mqtt/status: Get connection status
+Key Functions :
+connectMQTT(brokerUrl): Establish br oker connection
+subscribeToStations(): Listen for status updat es
+publishCommand(stationId, command): Send device commands
+syncToFirestore(topic, message): Updat e datab ase
+Dependencies : MQ TT.js, Fir ebase Fir estore
+5. DATABASE DESIGN
+5.1 Database Selection
+Firebase Fir estore is select ed as the primar y datab ase for the following r easons:
+1. Real-time S ynchr onization : Built -in suppor t for r eal-time data updat es
+2. Scalability : Automatic scaling t o handle lar ge user b ases
+3. Integration : Seamless int egration with Fir ebase Authentication and FCM
+4. Cloud-b ased : No ser ver management r equir ed
+5. Flexible Schema : Document -based structur e suitable for ev olving r equir ements
+5.2 Data Model
+5.2.1 User s Collection
+Document S tructur e:
+{
+  uid: string;                    // Firebase Auth UID (Document ID)
+  email: string;
+  displayName: string;
+  phoneNumber?: string;
+  vehicleInfo?: {
+    make: string;
+    model: string;
+    batteryCapacity: number;      // kWh
+    connectorType: string;        // Type1, Type2, CCS, CHAdeMO, Tesla
+  };
+  paymentMethods?: Array<{
+    id: string;
+    type: 'card' | 'bank_account';
+    last4?: string;
+    brand?: string;
+    isDefault: boolean;
+  }>;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+Index es:
+email (single field index)
+createdAt (single field index)
+5.2.2 Char gingS tations Collection
+Document S tructur e:
+{
+  id: string;                     // Document ID
+  name: string;
+  location: {
+    latitude: number;
+    longitude: number;
+    address: string;
+    city?: string;
+    country?: string;
+  };
+  connectors: Array<{
+    id: string;
+    type: 'Type1' | 'Type2' | 'CCS' | 'CHAdeMO' | 'Tesla';
+    power: number;                // kW
+    available: boolean;
+    currentStatus?: 'available' | 'occupied' | 'maintenance';
+  }>;
+  available: boolean;             // Overall station availability
+  occupied: number;               // Number of occupied connectors
+  total: number;                  // Total number of connectors
+  pricing: {
+    perKwh: number;               // Price per kWh (currency unit)
+    perMinute: number;            // Price per minute (currency unit)
+    currency: string;             // e.g., 'TRY', 'USD', 'EUR'
+  };
+  amenities: Array<string>;       // e.g., ['WiFi', 'Restroom', 'Cafe']
+  rating: number;                 // Average rating (0-5)
+  reviewCount: number;
+  reviews: Array<{
+    userId: string;
+    userName: string;
+    rating: number;
+    comment: string;
+    date: Timestamp;
+  }>;
+  operatingHours: {
+    open: string;                 // e.g., "08:00"
+    close: string;                // e.g., "22:00"
+    days: Array<string>;          // e.g., ['Monday', 'Tuesday', ...]
+  };
+  operatorId?: string;            // Station operator/administrator ID
+  iotDeviceId?: string;           // MQTT device identifier
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+Index es:
+location.latitude, location.longitude (composit e geosp atial index)
+available (single field index)
+operatorId (single field index)
+5.2.3 R eservations Collection
+Document S tructur e:
+{
+  id: string;                     // Document ID
+  userId: string;                 // Reference to users collection
+  stationId: string;              // Reference to chargingStations collection
+  connectorId: string;            // Specific connector identifier
+  startTime: Timestamp;
+  endTime: Timestamp;
+  status: 'pending' | 'active' | 'completed' | 'cancelled';
+  totalCost: number;
+  paymentIntentId?: string;       // Stripe payment intent ID
+  paymentStatus: 'pending' | 'paid' | 'failed' | 'refunded';
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+Index es:
+userId, status (composit e index)
+stationId, startTime, endTime (composit e index)
+status (single field index)
+createdAt (single field index)
+5.2.4 P ayments Collection (Optional)
+Document S tructur e:
+{
+  id: string;                     // Document ID
+  userId: string;
+  reservationId: string;
+  amount: number;
+  currency: string;
+  paymentIntentId: string;        // Stripe payment intent ID
+  status: 'succeeded' | 'failed' | 'pending';
+  transactionId?: string;
+  createdAt: Timestamp;
+}
+5.3 Data Relationships
+1. User s → R eservations : One-t o-many r elationship (userId field)
+2. Char gingS tations → R eservations : One-t o-many r elationship (stationId field)
+3. Reservations → P ayments : One-t o-one r elationship (r eservationId field)
+5.4 Data Validation Rules
+Firestore Security Rules ensur e data int egrity:
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users can read/write their own profile
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    
+    // Stations are readable by all, writable by admins
+    match /chargingStations/{stationId} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && 
+                      
+get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    // Users can read/write their own reservations
+    match /reservations/{reservationId} {
+      allow read, write: if request.auth != null && 
+                            request.resource.data.userId == request.auth.uid;
+    }
+  }
+}
+6. API DESIGN
+6.1 API Overview
+The b ackend pr ovides a REST ful API following REST principles:
+Base URL : https://api.ecna.com/api (production)
+Development URL : http://localhost:3000/api
+Authentication : JWT tokens in Authorization header
+Cont ent-Type: application/json
+Response For mat: JSON
+6.2 Authentication Endpoints
+6.2.1 R egist er User
+Endpoint : POST /api/auth/register
+Request Body :
+{
+  "email": "user@example.com",
+  "password": "SecurePassword123!",
+  "displayName": "John Doe"
+}
+Response  (201 Cr eated):
+{
+  "user": {
+    "uid": "firebase-uid",
+    "email": "user@example.com",
+    "displayName": "John Doe"
+  },
+  "token": "jwt-token-string"
+}
+Error Responses :
+400 Bad Request: Invalid input data
+409 Conflict: Email alr eady exists
+6.2.2 Get Curr ent User
+Endpoint : GET /api/auth/me
+Header s:
+Authorization: Bearer <jwt-token>
+Response  (200 OK):
+{
+  "uid": "user-uid",
+  "email": "user@example.com",
+  "displayName": "John Doe",
+  "phoneNumber": "+905551234567",
+  "vehicleInfo": {
+    "make": "Tesla",
+    "model": "Model 3",
+    "batteryCapacity": 75,
+    "connectorType": "Type2"
+  },
+  "createdAt": "2025-01-15T10:30:00Z"
+}
+6.2.3 Updat e User Pr ofile
+Endpoint : PUT /api/auth/me
+Header s:
+Authorization: Bearer <jwt-token>
+Request Body :
+{
+  "displayName": "John Updated",
+  "phoneNumber": "+905559876543",
+  "vehicleInfo": {
+    "make": "Tesla",
+    "model": "Model S",
+    "batteryCapacity": 100,
+    "connectorType": "Type2"
+  }
+}
+6.3 Station Endpoints
+6.3.1 Get All S tations
+Endpoint : GET /api/stations
+Quer y Paramet ers:
+latitude (optional): Filt er by latitude
+longitude (optional): Filt er by longitude
+radius (optional): Sear ch radius in kilomet ers (default: 10)
+available (optional): Filt er by av ailability (true/false)
+connectorType (optional): Filt er by connect or type
+Response  (200 OK):
+{
+  "stations": [
+    {
+      "id": "station-123",
+      "name": "Downtown Charging Hub",
+      "location": {
+        "latitude": 37.7749,
+        "longitude": -122.4194,
+        "address": "123 Main St, San Francisco, CA"
+      },
+      "available": true,
+      "occupied": 2,
+      "total": 4,
+      "pricing": {
+        "perKwh": 2.50,
+        "perMinute": 0.10,
+        "currency": "USD"
+      },
+      "rating": 4.5,
+      "reviewCount": 120
+    }
+  ],
+  "total": 15
+}
+6.3.2 Get S tation by ID
+Endpoint : GET /api/stations/:id
+Response  (200 OK):
+{
+  "id": "station-123",
+  "name": "Downtown Charging Hub",
+  "location": {
+    "latitude": 37.7749,
+    "longitude": -122.4194,
+    "address": "123 Main St, San Francisco, CA"
+  },
+  "connectors": [
+    {
+      "id": "conn-1",
+      "type": "Type2",
+      "power": 22,
+      "available": true,
+      "currentStatus": "available"
+    },
+    {
+      "id": "conn-2",
+      "type": "CCS",
+      "power": 50,
+      "available": false,
+      "currentStatus": "occupied"
+    }
+  ],
+  "available": true,
+  "occupied": 2,
+  "total": 4,
+  "pricing": {
+    "perKwh": 2.50,
+    "perMinute": 0.10,
+    "currency": "USD"
+  },
+  "amenities": ["WiFi", "Restroom", "Cafe"],
+  "rating": 4.5,
+  "reviewCount": 120,
+  "reviews": [
+    {
+      "userId": "user-456",
+      "userName": "Jane Smith",
+      "rating": 5,
+      "comment": "Great location and fast charging!",
+      "date": "2025-01-10T14:30:00Z"
+    }
+  ],
+  "operatingHours": {
+    "open": "08:00",
+    "close": "22:00",
+    "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+  }
+}
+6.3.3 Updat e Station A vailability
+Endpoint : PUT /api/stations/:id/availability
+Header s:
+Authorization: Bearer <jwt-token>
+Request Body :
+{
+  "available": true,
+  "occupied": 2,
+  "connectors": [
+    {
+      "id": "conn-1",
+      "available": true,
+      "currentStatus": "available"
+    },
+    {
+      "id": "conn-2",
+      "available": false,
+      "currentStatus": "occupied"
+    }
+  ]
+}
+Note: Typically called by IoT devices via MQ TT webhook
+6.4 Reservation Endpoints
+6.4.1 Get User R eservations
+Endpoint : GET /api/reservations
+Header s:
+Authorization: Bearer <jwt-token>
+Quer y Paramet ers:
+status (optional): Filt er by status (pending, activ e, complet ed, cancelled)
+Response  (200 OK):
+{
+  "reservations": [
+    {
+      "id": "res-789",
+      "stationId": "station-123",
+      "stationName": "Downtown Charging Hub",
+      "connectorId": "conn-1",
+      "startTime": "2025-01-20T10:00:00Z",
+      "endTime": "2025-01-20T12:00:00Z",
+      "status": "pending",
+      "totalCost": 25.50,
+      "paymentStatus": "pending",
+      "createdAt": "2025-01-15T09:00:00Z"
+    }
+  ]
+}
+6.4.2 Cr eate Reservation
+Endpoint : POST /api/reservations
+Header s:
+Authorization: Bearer <jwt-token>
+Request Body :
+{
+  "stationId": "station-123",
+  "connectorId": "conn-1",
+  "startTime": "2025-01-20T10:00:00Z",
+  "endTime": "2025-01-20T12:00:00Z"
+}
+Response  (201 Cr eated):
+{
+  "id": "res-789",
+  "userId": "user-456",
+  "stationId": "station-123",
+  "connectorId": "conn-1",
+  "startTime": "2025-01-20T10:00:00Z",
+  "endTime": "2025-01-20T12:00:00Z",
+  "status": "pending",
+  "totalCost": 25.50,
+  "createdAt": "2025-01-15T09:00:00Z"
+}
+Error Responses :
+400 Bad Request: Invalid time slot or connect or unav ailable
+409 Conflict: Time slot alr eady r eserved
+6.4.3 Updat e Reservation
+Endpoint : PUT /api/reservations/:id
+Header s:
+Authorization: Bearer <jwt-token>
+Request Body :
+{
+  "status": "cancelled"
+}
+6.5 Payment Endpoints
+6.5.1 Cr eate Payment Int ent
+Endpoint : POST /api/payments/create-intent
+Header s:
+Authorization: Bearer <jwt-token>
+Request Body :
+{
+  "reservationId": "res-789",
+  "amount": 2550,
+  "currency": "USD"
+}
+Response  (200 OK):
+{
+  "clientSecret": "pi_xxx_secret_xxx",
+  "paymentIntentId": "pi_xxx"
+}
+6.5.2 Confir m Payment
+Endpoint : POST /api/payments/confirm
+Header s:
+Authorization: Bearer <jwt-token>
+Request Body :
+{
+  "paymentIntentId": "pi_xxx",
+  "reservationId": "res-789"
+}
+Response  (200 OK):
+{
+  "status": "succeeded",
+  "transactionId": "ch_xxx",
+  "reservationId": "res-789"
+}
+6.6 MQTT Endpoints
+6.6.1 Publish Command
+Endpoint : POST /api/mqtt/publish/:stationId
+Header s:
+Authorization: Bearer <jwt-token>
+Request Body :
+{
+  "command": "start_charging",
+  "connectorId": "conn-1",
+  "parameters": {
+    "power": 22
+  }
+}
+6.6.2 Get MQ TT Status
+Endpoint : GET /api/mqtt/status
+Response  (200 OK):
+{
+  "connected": true,
+  "brokerUrl": "mqtt://broker.example.com:1883",
+  "lastUpdate": "2025-01-15T10:30:00Z"
+}
+6.7 Error Response Format
+All err or responses follow this for mat:
+{
+  "error": {
+    "message": "Error description",
+    "code": "ERROR_CODE",
+    "details": {}
+  }
+}
+HTTP Status Codes :
+200 OK: Successful r equest
+201 Created: Resour ce cr eated successfully
+400 Bad Request: Invalid input
+401 Unauthorized: Authentication r equir ed
+403 Forbidden: Insufficient per missions
+404 Not Found: Resour ce not found
+409 Conflict: Resour ce conflict
+500 Internal Server Error: Server err or
+7. USER INTERF ACE DESIGN
+7.1 Design Principles
+The UI design follows these principles:
+1. User-Cent ered Design : Intuitiv e navigation and clear infor mation hierar chy
+2. Accessibility : Suppor t for scr een r eader s and accessibility standar ds
+3. Responsiv e Design : Adapts t o differ ent scr een sizes and orientations
+4. Consist ent Design Language : Unified color scheme, typography , and components
+5. Performance Optimization : Efficient r endering and minimal data lo ading
+7.2 Screen Specifications
+7.2.1 Authentication Scr eens
+Login Scr een:
+Email/p assw ord input fields
+"Remember me " option
+"Forgot p assw ord" link
+"Sign up" navigation link
+Primar y action butt on: "Log In "
+Regist er Scr een:
+Email, p assw ord, display name inputs
+Passw ord strength indicat or
+Terms and conditions checkbo x
+"Already hav e an account ?" link
+Primar y action butt on: "Sign Up"
+7.2.2 Home Scr een
+Layout:
+Search bar at t op
+Filter butt ons (A vailable, Nearby , Fast Char ging)
+Station list with car ds showing:
+Station name
+Distance fr om user
+Availability status
+Rating and r eview count
+Pricing infor mation
+Pull-t o-refresh functionality
+Navigation t o Map view
+7.2.3 Map Scr een
+Featur es:
+Interactiv e map with station mark ers
+Clust er mark ers for multiple stations
+User location indicat or
+Mark er info windows with quick details
+Bottom sheet with station details on mark er tap
+Navigation butt on to station location
+Filter ov erlay
+Map Contr ols:
+Zoom contr ols
+My location butt on
+Map type t oggle (standar d/sat ellite)
+7.2.4 S tation Details Scr een
+Sections :
+1. Header : Station name, rating, distance
+2. Availability : Real-time status, occupied/t otal connect ors
+3. Location : Addr ess, map pr eview , navigation butt on
+4. Connect ors: List o f connect ors with types, pow er, availability
+5. Pricing : Per kWh and per minut e rates
+6. Amenities : Icon list o f available amenities
+7. Reviews : Scrollable r eview list with ratings
+8. Operating Hour s: Schedule display
+9. Action Butt on: "Reserve Now" (if av ailable)
+7.2.5 R eservation Scr een
+Featur es:
+Station infor mation summar y
+Connect or selection (dr opdown/list)
+Date and time pick ers (star t/end)
+Duration display
+Cost calculation pr eview
+Reservation summar y
+Terms and conditions
+Primar y action: "Confir m Reservation "
+7.2.6 P ayment Scr een
+Featur es:
+Reservation summar y
+Total amount display
+Payment method selection
+Card input fields (via S tripe SDK)
+Security b adges/indicat ors
+Primar y action: "P ay Now"
+Processing indicat or
+7.2.7 Pr ofile Scr een
+Sections :
+User infor mation display
+Vehicle infor mation (editable)
+Payment methods management
+Reservation hist ory
+Settings (notifications, language, et c.)
+Logout butt on
+7.3 Navigation Structure
+Navigation P attern: Stack Navigation with T ab Navigation
+App (Stack Navigator)
+├── Auth Stack
+│   ├── Login Screen
+│   └── Register Screen
+└── Main Stack (Tab Navigator)
+    ├── Home Tab
+    │   ├── Home Screen
+    │   ├── Station Details Screen
+    │   └── Reservation Screen
+    ├── Map Tab
+    │   ├── Map Screen
+    │   └── Station Details Screen
+    ├── Reservations Tab
+    │   ├── Reservations List
+    │   └── Reservation Details
+    └── Profile Tab
+        └── Profile Screen
+7.4 UI Components
+Reusable Components :
+Button: Primar y, secondar y, text v ariants
+Input: Text input with v alidation
+Card: Station car d, reservation car d
+Badge: Status indicat ors, availability b adges
+Rating: Star rating display
+LoadingIndicator: Spinner , skeleton lo aders
+Modal: Confir mation dialogs, info modals
+BottomSheet: Station details, filt ers
+7.5 Color Scheme
+Primar y Color s:
+Primar y: #00C853 (Gr een - EV theme)
+Primar y Dark : #00A043
+Primar y Light: #5EFC82
+Secondar y Color s:
+Secondar y: #2196F3 (Blue)
+Accent: #FF9800 (Orange)
+Status Color s:
+Success: #4CAF50
+Warning: #FF9800
+Error: #F44336
+Info: #2196F3
+Neutral Color s:
+Background: #F5F5F5
+Surface: #FFFFFF
+Text Primar y: #212121
+Text Secondar y: #757575
+Divider : #BDBDBD
+8. SECURIT Y DESIGN
+8.1 Authentication and Authorization
+8.1.1 User Authentication
+Firebase Authentication :
+Email/p assw ord authentication
+JWT token generation
+Token expiration: 1 hour (default)
+Token refresh mechanism
+Passw ord hashing: Fir ebase managed (bcr ypt-based)
+Token Management :
+Tokens st ored secur ely on device (AsyncS torage/K eychain)
+Automatic t oken refresh befor e expiration
+Token validation on each API r equest
+8.1.2 Author ization
+Role-Based Access Contr ol (RBA C):
+User R ole: Standar d EV user (default)
+Admin R ole: Station operat ors and administrat ors
+Permission Matr ix:
+Users can r ead stations, cr eate reservations, updat e own pr ofile
+Admins can cr eate/updat e stations, view analy tics, manage r eservations
+8.2 Data Security
+8.2.1 Data Encr yption
+In Transit :
+HTTPS/TLS 1.2+ for all API communications
+MQTT over TLS (MQ TTS) for IoT communications
+Certificat e pinning (mobile apps)
+At Rest:
+Firebase Fir estore: Encr ypted by default
+Sensitiv e data (p ayment info): S tripe handles encr yption
+Local st orage: Encr ypted st orage for t okens
+8.2.2 Input V alidation
+Back end V alidation :
+Express V alidat or for r equest v alidation
+Schema v alidation for data models
+SQL injection pr evention (NoSQL, but sanitization applied)
+XSS pr evention thr ough input sanitization
+Frontend V alidation :
+Client -side v alidation for user experience
+Server-side v alidation as security lay er (nev er trust client)
+8.3 API Security
+8.3.1 Rat e Limiting
+Implementation :
+Express Rat e Limit middlewar e
+Limits: 100 r equests per 15 minut es per IP
+Stricter limits for authentication endpoints: 5 r equests per 15 minut es
+Purpose : Prevent brut e force attacks and API abuse
+8.3.2 Secur ity Header s
+Helmet.js Configuration :
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 1; mode=block
+Strict-Transport-Security: max-age=31536000
+Content-Security-Policy: Appr opriat e directives
+8.3.3 C ORS Configuration
+Settings :
+Whit elist specific origins (pr oduction)
+Credentials: true (for cookies/auth)
+Allow ed methods: GE T, POST , PUT , DELE TE
+Allow ed header s: Cont ent-Type, Authorization
+8.4 Payment Security
+8.4.1 S tripe Int egration
+PCI Compliance :
+No car d data st ored on ser vers
+Stripe Elements/SDK handles car d input
+Payment int ents cr eated ser ver-side
+Client secr ets transmitt ed secur ely
+Payment Flow Secur ity:
+1. Client r equests p ayment int ent fr om b ackend
+2. Backend cr eates int ent with S tripe API
+3. Client r eceiv es client secr et (non-sensitiv e)
+4. Client confir ms p ayment with S tripe SDK
+5. Backend v erifies p ayment status via w ebhook
+8.5 IoT Security
+8.5.1 MQ TT Secur ity
+Authentication :
+Username/p assw ord authentication for MQ TT broker
+Certificat e-based authentication (pr oduction)
+Topic access contr ol (ACL)
+Topic S tructur e:
+Stations publish t o: stations/{stationId}/status
+Backend publishes commands t o: stations/{stationId}/commands
+Topic per missions r estrict device access
+Message Secur ity:
+Encrypted payloads (optional, for sensitiv e commands)
+Message authentication codes (MA C) for int egrity
+8.6 Privacy Protection
+8.6.1 Data Pr ivacy
+User Data :
+Minimal data collection (only necessar y fields)
+User consent for data pr ocessing
+Right t o delet e account and data (GDPR compliance)
+Location Data :
+Location used only for station discov ery
+Not st ored per manently without consent
+Optional location ser vices
+8.6.2 Data R etention
+User data: R etained while account is activ e
+Reservation data: R etained for 2 y ears (accounting)
+Payment data: Handled by S tripe (their r etention policy)
+Logs: R etained for 30 days (security monit oring)
+9. IoT INTEGRA TION DESIGN
+9.1 IoT Architecture
+The IoT int egration enables r eal-time communication betw een char ging stations and the application b ackend.
+Communication Flow :
+IoT Device (Station)  ←→  MQTT Broker  ←→  Backend Server  ←→  Firestore  ←→  Mobile App
+9.2 MQTT Protocol
+9.2.1 Pr otocol Selection
+MQTT (Message Queuing T elemetr y Transpor t) is chosen because:
+Lightw eight pr otocol suitable for IoT devices
+Publish-subscribe p attern for r eal-time updat es
+Low b andwidth r equir ements
+Reliable message deliv ery (QoS lev els)
+Wide industr y adoption
+9.2.2 MQ TT Topics
+Topic S tructur e:
+stations/{stationId}/status          # Station publishes status updates
+stations/{stationId}/commands        # Backend publishes commands
+stations/{stationId}/connectors/{connectorId}/status  # Per-connector status
+stations/{stationId}/connectors/{connectorId}/commands  # Per-connector commands
+Message For mat (JSON):
+{
+  "timestamp": "2025-01-15T10:30:00Z",
+  "stationId": "station-123",
+  "available": true,
+  "occupied": 2,
+  "total": 4,
+  "connectors": [
+    {
+      "id": "conn-1",
+      "available": true,
+      "currentStatus": "available",
+      "power": 22,
+      "energyDelivered": 15.5
+    }
+  ]
+}
+9.3 Backend MQTT Integration
+9.3.1 MQ TT Client
+Implementation :
+MQTT.js librar y for Node.js
+Persistent connection t o broker
+Automatic r econnection on disconnect
+QoS Lev el 1 (at least once deliv ery)
+Subscr iptions :
+Subscribe t o all station status t opics: stations/+/status
+Subscribe t o connect or topics: stations/+/connectors/+/status
+Publishing :
+Commands published t o device t opics
+QoS Lev el 1 for r eliability
+9.3.2 Fir estore Synchr onization
+Sync Logic :
+1. Receiv e MQ TT message fr om station
+2. Validat e message structur e
+3. Updat e Firestore document at omically
+4. Trigger r eal-time list eners (mobile apps r eceiv e updat e)
+5. Log updat e for audit trail
+Conf lict R esolution :
+Last-write-wins strat egy (acceptable for status updat es)
+Timestamp-b ased or dering
+9.4 Frontend Real-time Updates
+9.4.1 MQ TT Ser vice
+Implementation :
+MQTT.js in R eact Nativ e (via r eact-nativ e-mqtt or W ebSock et bridge)
+Alternativ e: WebSock et connection t o backend (b ackend for wards MQ TT messages)
+Updat e Strategy:
+1. Connect t o MQ TT broker (or W ebSock et)
+2. Subscribe t o relevant station t opics
+3. Updat e local stat e on message r eceipt
+4. Re-render UI components
+Optimization :
+Subscribe only t o visible stations (map view)
+Unsubscribe when leaving scr een
+Batch updat es to reduce r e-render s
+9.5 Command Publishing
+9.5.1 Command T ypes
+Available Commands :
+start_charging: Initiat e char ging session
+stop_charging: Terminat e char ging session
+update_status: Request status updat e
+reset: Reset device (admin only)
+Command For mat:
+{
+  "command": "start_charging",
+  "connectorId": "conn-1",
+  "parameters": {
+    "power": 22,
+    "duration": 7200
+  },
+  "userId": "user-456",
+  "reservationId": "res-789",
+  "timestamp": "2025-01-15T10:30:00Z"
+}
+9.5.2 Command Flow
+1. User initiat es action (e.g., star t char ging)
+2. Frontend calls b ackend API: POST /api/mqtt/publish/:stationId
+3. Backend v alidat es user per missions and r eservation
+4. Backend publishes command t o MQ TT topic
+5. IoT device r eceiv es command and ex ecutes
+6. Device publishes status updat e
+7. Backend syncs t o Firestore
+8. Frontend r eceiv es real-time updat e
+9.6 Error Handling
+Connection F ailur es:
+Automatic r econnection with exponential b ackoff
+Fallback t o polling if MQ TT unav ailable
+User notification o f connectivity issues
+Message F ailur es:
+Retry mechanism for failed commands
+Timeout handling (commands expir e after 30 seconds)
+Error logging and monit oring
+10. PERFORMANCE REQUIREMENTS
+10.1 Response Time Requirements
+API R esponse Times :
+Authentication endpoints: < 500ms
+Station list queries: < 1s
+Station details: < 500ms
+Reservation cr eation: < 1s
+Payment pr ocessing: < 2s (ex cluding S tripe pr ocessing)
+Real-time updat es: < 100ms (MQ TT latency)
+Mobile App P erformance :
+Screen lo ad time: < 2s
+Map r endering: < 3s
+Image lo ading: Pr ogressiv e/lazy lo ading
+Smooth scr olling: 60 FPS
+10.2 Scalability Requirements
+User Cap acity :
+Suppor t 10,000 concurr ent user s
+Handle 1,000 r equests per second (API)
+Datab ase: Scale t o 1 million user s, 100,000 stations
+Data Gr owth :
+Reservations: 1 million per y ear
+Real-time updat es: 100 updat es per second (peak)
+Storage: Efficient data ar chiving strat egy
+10.3 Availability Requirements
+Uptime :
+System av ailability: 99.5% (43.8 hour s downtime/y ear)
+Critical ser vices (p ayments, r eservations): 99.9%
+Redundancy :
+Datab ase: Fir ebase Fir estore (Google Cloud r edundancy)
+Backend: Multiple ser ver instances with lo ad balancing
+MQTT Broker: High-av ailability clust er
+10.4 Optimization Strategies
+10.4.1 Datab ase Optimization
+Index es on fr equently queried fields
+Pagination for lar ge result sets
+Caching fr equently accessed data (R edis - futur e)
+Data aggr egation for analy tics
+10.4.2 API Optimization
+Response compr ession (gzip)
+Request b atching wher e possible
+GraphQL consideration (futur e) for r educed ov er-fetching
+CDN for static assets
+10.4.3 Mobile App Optimization
+Code splitting and lazy lo ading
+Image optimization and caching
+Offline suppor t (cached data)
+Bundle size optimization (tr ee shaking)
+11. DEPL OYMENT AR CHITECTURE
+11.1 Deployment Overview
+The syst em is deploy ed acr oss multiple cloud ser vices:
+Mobile Apps : iOS App S tore, Google Play S tore
+Back end API : Cloud platfor m (AWS, Google Cloud, or Her oku)
+Datab ase: Firebase Fir estore (Google Cloud)
+Authentication : Firebase Authentication
+MQTT Broker: Cloud MQ TT ser vice (e.g., CloudMQ TT, AWS IoT Cor e)
+CDN : CloudFr ont or Cloud CDN (for static assets)
+11.2 Backend Deployment
+11.2.1 Ser ver Configuration
+Recommended Platfor m: Node.js hosting (A WS EC2, Google Cloud Run, Her oku)
+Envir onment V ariables :
+NODE_ENV=production
+PORT=3000
+FRONTEND_URL=https://app.ecna.com
+FIREBASE_SERVICE_ACCOUNT=<json>
+STRIPE_SECRET_KEY=<key>
+MQTT_BROKER_URL=mqtts://broker.ecna.com:8883
+MQTT_USERNAME=<username>
+MQTT_PASSWORD=<password>
+JWT_SECRET=<secret>
+Process Management : PM2 or syst emd
+Load Balancing : Multiple instances behind lo ad balancer
+11.2.2 CI/CD Pipeline
+Stages :
+1. Build : Install dependencies, run t ests
+2. Test: Unit t ests, int egration t ests
+3. Deploy : Deploy t o staging envir onment
+4. Integration T ests: E2E t ests on staging
+5. Deploy Pr oduction : Manual appr oval, deploy t o production
+6. Monit or: Health checks and monit oring
+Tools: GitHub Actions, GitLab CI, or Jenkins
+11.3 Mobile App Deployment
+11.3.1 Build Pr ocess
+React Nativ e (Expo) :
+1. Configur e app.json with pr oduction settings
+2. Build iOS: eas build --platform ios
+3. Build Andr oid: eas build --platform android
+4. Submit t o app st ores
+App S tore Requir ements :
+iOS: App S tore Connect submission
+Andr oid: Google Play Console submission
+Privacy policy URL
+App icons and scr eenshots
+Store listings
+11.3.2 Updat e Strategy
+Over-The-Air (O TA) Updat es:
+Expo Updat es for J avaScript bundle updat es
+Nativ e updat es requir e app st ore submission
+Gradual r ollout strat egy
+11.4 Database Deployment
+Firebase Fir estore:
+No deployment r equir ed (managed ser vice)
+Configuration via Fir ebase Console
+Security rules deploy ed via Fir ebase CLI
+Backup strat egy: Aut omat ed daily b ackups
+11.5 Monitoring and Logging
+11.5.1 Application Monit oring
+Metr ics:
+API r esponse times
+Error rat es
+Request counts
+Resour ce utilization (CPU, memor y)
+Tools:
+Application P erformance Monit oring (APM): New R elic, Datadog, or Fir ebase P erformance
+Error tracking: Sentr y
+Logging: Winst on, Bunyan, or Cloud Logging
+11.5.2 Health Checks
+Endpoints :
+GET /health: Basic health check
+GET /health/detailed: Datab ase, MQ TT connectivity
+Monit oring:
+Uptime monit oring: Pingdom, UptimeR obot
+Alerting: Email, SMS, Slack notifications
+12. TESTING STRA TEGY
+12.1 Testing Levels
+12.1.1 Unit T esting
+Scope : Individual functions and components
+Frontend:
+React Nativ e Testing Librar y
+Jest for J avaScript/T ypeScript
+Component t esting (snapshot t ests)
+Service function t esting
+Back end:
+Jest or Mocha for Node.js
+Route handler t esting
+Utility function t esting
+Mock dependencies (Fir ebase, S tripe, MQ TT)
+Coverage T arget: 70% code cov erage
+12.1.2 Int egration T esting
+Scope : Module int eractions and API endpoints
+Back end API T esting :
+Super test for Expr ess endpoints
+Test datab ase (Fir ebase Emulat or)
+Mock ext ernal ser vices (S tripe t est mode, MQ TT mock)
+Test authentication flows
+Test p ayment flows
+Frontend Int egration :
+Test navigation flows
+Test API ser vice calls
+Test Fir ebase int egration
+Mock API r esponses
+12.1.3 End-t o-End T esting
+Scope : Complet e user w orkflows
+Tools: Detox (React Nativ e E2E t esting)
+Test Scenar ios:
+1. User r egistration and login
+2. Search for stations and view details
+3. Create reservation
+4. Complet e payment
+5. View r eservation hist ory
+6. Receiv e real-time updat es
+12.1.4 P erformance T esting
+Load Testing :
+Tools: Ar tillery, k6, or Ap ache JMet er
+Test API endpoints under lo ad
+Measur e response times and thr oughput
+Identif y bottlenecks
+Stress T esting :
+Test syst em limits
+Datab ase quer y per formance
+Concurr ent user simulation
+12.2 Test Data Management
+Test Datab ases:
+Firebase Emulat or Suit e for dev elopment
+Separate test Fir ebase pr oject for int egration t ests
+Seed data scripts for consist ent test data
+Mock Data :
+Station data fixtur es
+User t est accounts
+Payment t est car ds (S tripe t est mode)
+12.3 Test Automation
+Continuous Int egration :
+Run t ests on ev ery commit
+Run t ests befor e deployment
+Fail build on t est failur es
+Test R epor ts:
+Generat e cov erage r epor ts
+Test result summaries
+Visual r egression t esting (scr eenshots)
+13. REFERENCES
+13.1 Academic References
+1. International Ener gy Agency (IE A). (2023). Glob al EV Outlook 2023: Cat ching up with climat e ambitions. P aris:
+IEA Publications.
+2. Azzop ardi, B., & Gan, C. K. (2022). Smar t Char ging Infrastructur e for Electric V ehicles: Int egration with Smar t
+Grids and R enewable Ener gy Systems. R enewable and Sustainable Ener gy Reviews, 161, 112357.
+3. Shukla, A., & J ain, S. (2021). Cloud-Based IoT Ar chitectur e for Electric V ehicle Char ging Netw ork
+Management. IEEE Access, 9, 77154–77165.
+4. Mahmoud, M. S., & Nasir , M. T . (2020). Cyber security and Priv acy in Smar t Grids: Challenges and Solutions.
+IEEE S ystems Jour nal, 14(3), 4505–4516.
+5. Ghosh, A. (2023). Int egration o f Electric V ehicles and R enewable Ener gy Sour ces in Smar t Cities: A R eview .
+Energy Repor ts, 9, 3152–3166.
+13.2 Technical Documentation
+1. React Nativ e Documentation. (2024). R etriev ed from https://r eactnativ e.dev/docs/getting-star ted
+2. Firebase Documentation. (2024). R etriev ed from https://fir ebase.google.com/docs
+3. Stripe API Documentation. (2024). R etriev ed from https://stripe.com/docs/api
+4. MQTT Protocol Specification. (2019). O ASIS S tandar d. Retriev ed from https://docs.o asis-
+open.or g/mqtt/mqtt/v5.0/mqtt -v5.0.html
+5. Express.js Documentation. (2024). R etriev ed from https://expr essjs.com/
+6. Node.js Documentation. (2024). R etriev ed from https://nodejs.or g/docs
+13.3 Standards and Protocols
+1. OAuth 2.0 Authorization Framew ork. (2012). RFC 6749. IE TF.
+2. JSON W eb Token (JW T). (2015). RFC 7519. IE TF.
+3. Representational S tate Transfer (REST). (2000). Ar chitectural S tyle. Fielding, R. T .
+4. Message Queuing T elemetr y Transpor t (MQ TT). (2019). O ASIS S tandar d v5.0.
+5. Transpor t Lay er Security (TLS). (2018). RFC 8446. IE TF.
+APPENDIX A: GL OSSAR Y
+API: Application Pr ogramming Int erface
+CDN : Cont ent Deliv ery Netw ork
+CI/CD : Continuous Int egration/Continuous Deployment
+E2E: End-t o-End
+FCM : Firebase Cloud Messaging
+HTTPS: Hyper text Transfer Pr otocol Secur e
+IoT: Internet o f Things
+JWT: JSON W eb Token
+MQTT: Message Queuing T elemetr y Transpor t
+OTA: Over-The-Air
+PCI: Payment Car d Industr y
+QoS: Quality o f Service
+REST : Representational S tate Transfer
+SDK: Software Dev elopment Kit
+TLS: Transpor t Lay er Security
+APPENDIX B: A CRONYMS
+ECNA : EV Char ging Netw ork App
+EV: Electric V ehicle
+SDD: Software Design Document
+RBAC: Role-Based Access Contr ol
+GDPR : General Data Pr otection R egulation
+XSS: Cross-Sit e Scripting
+ACL: Access Contr ol List
+MAC: Message Authentication Code
+APM : Application P erformance Monit oring
+Document End
+
+--- DOCX ---
+
+
+
+
+Your Project  Name 
+
+
+
+
+
+
+Course Name Course Code 
+Department 
+University 
+
+
+
+
+
+
+
+
+
+Submitted by 
+
+
+
+
+Date Submitted 
+
+
+
+ABSTRACT 
+
+Write your abstract here. 
+Table of Contents 
+
+1. Introduction 1 
+2. Analysis and Design 1 
+2.1 Updated Functional Requirements 1 
+2.2 Updated Non-Functional Requirements 1 
+2.3 Updated Use Case Requirements 1 
+2.4 Design Classes 1 
+2.5 Sequence Diagram 1 
+2.6 Software Architecture 1 
+3. Prototype Description 1 
+3.1 Implementation Platform 1 
+3.2 Mapping between Requirements and Implemented Functions 2 
+3.3 Implementation Details 2 
+3.4 Actual Database Schema 2 
+4. Testing 2 
+4.1 Expected Test Scenarios 3 
+4.2 Unit Test 3 
+4.3 Functional Test 4 
+4.4 Usability Test 4 
+5. Deployment of the System 4 
+6. Limitation of the System 5 
+7. Conclusion and Future Work 5 
+8. Reference 5 
+
+
+
+
+
+
+
+
+
+
+
+
+
+List of Figures 
+
+Figure 1 .  Smart room use cases 3 
+Figure 2 .  Successful order placement 5 
+Figure 3 .  Successful order placement 6 
+Figure 4 .  Successful face recognition log in 6 
+Figure 5 .  System deployment diagram 7 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+List of  Tables 
+
+Table 1. Test Table 2 
+Table 2. Test Table 8 
+
+
+
+
+
+
+Introduction 
+
+[ Here you write what was the problem you were working on? Why it was important to work on this project? What have you accomplished? etc. ] 
+
+Analysis  and Design 
+[ Here you basically provide the updated analysis and design structures of the project. ] 
+Updated Functional Requirements 
+[Provide  functional requirements of your project to incorporate the new changes ] 
+
+
+Updated Non-Functional Requirements 
+[Provide non-functional requirements of your project to incorporate the new changes] 
+
+
+Updated Use Case Requirements 
+[Provide latest use case diagram] 
+
+
+Design Classes 
+[Provide the design class diagram with updates] 
+
+Sequence Diagram 
+[Provide the important sequence diagrams to show system behavior] 
+
+Sequence Diagram 1 
+
+Sequence Diagram n 
+
+Software Architecture 
+[Provide the software architecture diagrams and descriptions] 
+
+
+Prototype Description   
+[ First p rovide a short description  of the prototype to familiarize reader about your development work. ] 
+Implementation Platform 
+[Provide list of technologies  hardware/software  in addition to implementation platform used.] 
+
+
+
+Mapping between Requirements and Implemented Functions 
+The following table shows a mapping between the projected functionalities of the system and the corresponding implemented modules. 
+
+Table  1 . Test Table 
+Functional requirements 
+Modules/ Functions /Class  that implemented this  feature 
+Search facility 
+SearchByKeyword( string str) 
+
+SearchAdvance( String title, String year)  
+………………… 
+
+
+Implementation Details 
+[Here you try to give the details of interface and program main logic . Say what is the starting point of the system and what is the GUI interface (if any). Then you give a walkthrough of the system by  showing the sample interfaces to demonstrate other functionalities. At the same time, you try to explain the main logic in each important function. Provide code snippet to show the main logic, do not give the whole code. The following is an example .   ] 
+
+Figure  1 .   Sample code for creating and connecting to a socket 
+
+Actual Database Schema 
+[Here you give the actual ER diagram for the database you have finally designed. Additionally, you can also provide another view with attribute name and types]  
+
+
+Testing   
+[ F irst to introduce the test/quality evaluation  phase .  What test tool  you used  for different testing ?  Then the  detail  will follow. This section is very important ] 
+
+Expected Test Scenarios 
+[List the test scenarios, which you want to test] 
+
+Unit Test   
+[Here you should  provide the unit test result for all the components of your system that you have implemented. Remember,  Unit testing involves testing of each smallest logical unit of the software, which can be a module, a package, a file, or a class. Unit testing typically helps limit the ripple effect when fixing a bug. It also aids in the prevention of new feature implementation breaking the existing system.  
+
+Example test results  includes  the following ] 
+
+
+Database Module: 
+
+
+
+
+Functional Test   
+["Does the application deliver the capabilities that users need? Can users successfully complete the tasks they need to perform? Do they receive the correct responses  for  their requests? If not, a company risks losing significant revenue and customer loyalty. Growing competitive pressures are forcing organizations to ensure that their applications meet their business requirements before they are put into production." ( http://www.parasoft.com/jsp/solutions/home.jsp?solution=FunTestSol ) 
+
+There will be  a quite  a lot of functional testing to make sure that the system operates as required. A combination of white-box and black-box style testing has been and will continue to be used. We have been using a trial version of NCover to do code coverage testing on our system.  Again  due to the small nature of this project and the short time frame in which we will be in control of the source code means that the results provided by the NCover code coverage tool are not as important as they would be in a much larger project. 
+] 
+
+Usability Test   
+[Write what you did to test the usability of the system, what approach you took to correct the usability issues] 
+
+Deployment of the System 
+[Provide a figure/description to clarify the actual deployment of the system] 
+
+Limitation of the System 
+[here you explain what u wanted to do but could not………….] 
+
+Conclusion and Future Work 
+[Summarize the document. Also say where to go next, what can be improved and added in the system] 
+
+
+Reference 
+Write the   references  here. 

@@ -9,10 +9,14 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "geocode": "node scripts/geocode-stations.mjs",
-    "geocode:all": "node scripts/geocode-stations.mjs --limit 20000"
+    "geocode:all": "node scripts/geocode-stations.mjs --limit 20000",
+    "geocode:all:photon": "node scripts/geocode-stations.mjs --input public/data/stations.geocoded.json --output public/data/stations.geocoded.json --cache public/data/geocode-cache.json --limit 20000 --photon-only --sleepMs 950",
+    "geocode:batch100": "node scripts/geocode-stations.mjs --input public/data/stations.geocoded.json --output public/data/stations.geocoded.json --cache public/data/geocode-cache.json --limit 100 --photon-only --sleepMs 450"
   },
   "dependencies": {
+    "@types/leaflet-routing-machine": "^3.2.9",
     "leaflet": "^1.9.4",
+    "leaflet-routing-machine": "^3.2.12",
     "papaparse": "^5.5.3",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
