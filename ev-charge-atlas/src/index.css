@@ -2198,7 +2198,7 @@ button.result-card:focus-visible {
   gap: 8px;
   align-items: center;
   margin-right: 10px;
-  margin-bottom: 22px;
+  margin-top: 10px;
 }
 
 .map-layer-btn {

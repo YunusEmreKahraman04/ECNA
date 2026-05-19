@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback, createContext, useContext } from 'react';
 import Papa from 'papaparse';
 import { NavLink, Route, Routes, useSearchParams } from 'react-router-dom';
+import { MarkerClusterer, SuperClusterAlgorithm } from '@googlemaps/markerclusterer';
 import ecnaLogo from './assets/logo.png';
 import { t, type Lang } from './i18n';
 
@@ -842,7 +843,6 @@ function PlatformPage() {
 
 const GOOGLE_MAPS_DARK_STYLE = [
   { elementType: "geometry", stylers: [{ color: "#0d0f17" }] },
-  { elementType: "labels.icon", stylers: [{ visibility: "off" }] },
   { elementType: "labels.text.fill", stylers: [{ color: "#61687d" }] },
   { elementType: "labels.text.stroke", stylers: [{ color: "#0d0f17" }] },
   {
@@ -918,6 +918,7 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
   const mapHostRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const markerByIdRef = useRef<Map<string, any>>(new Map());
+  const markerClustererRef = useRef<any>(null);
   const directionsRendererRef = useRef<any>(null);
   const infoWindowRef = useRef<any>(null);
 
@@ -933,9 +934,24 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
   const [search, setSearch] = useState('');
   const [greenFilter, setGreenFilter] = useState<'all' | 'green' | 'normal'>('all');
   const [serviceFilter, setServiceFilter] = useState<'all' | 'Halka Açık' | 'Özel'>('all');
+  const [acDcFilter, setAcDcFilter] = useState<'all' | 'AC' | 'DC'>('all');
   const [radiusKm, setRadiusKm] = useState<RadiusKm>(50);
-  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(() => {
+    try {
+      const saved = localStorage.getItem('lastLocation');
+      return saved ? JSON.parse(saved) : null;
+    } catch { return null; }
+  });
+  
+  useEffect(() => {
+    if (userLocation) {
+      localStorage.setItem('lastLocation', JSON.stringify(userLocation));
+    }
+  }, [userLocation]);
+  
+  const [mapCenterState, setMapCenterState] = useState<{ lat: number; lng: number } | null>(null);
   const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
+  const userMarkerRef = useRef<any>(null);
   const [searchParams] = useSearchParams();
 
   // Map layer and traffic controls
@@ -1011,10 +1027,16 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
           serviceFilter === 'all' ? true : s.serviceType === normalizeServiceLabel(serviceFilter),
         )
         .filter((s) => {
-          if (!userLocation || radiusKm === 'all') return true;
+          if (acDcFilter === 'all') return true;
+          if (acDcFilter === 'AC') return s.hasAC;
+          if (acDcFilter === 'DC') return s.hasDC;
+          return true;
+        })
+        .filter((s) => {
+          if (radiusKm === 'all' || !userLocation) return true;
           return kmBetween(userLocation.lat, userLocation.lng, s.lat, s.lng) <= radiusKm;
         }),
-    [stations, greenFilter, serviceFilter, userLocation, radiusKm],
+    [stations, greenFilter, serviceFilter, acDcFilter, userLocation, radiusKm],
   );
 
   const filtered = useMemo(() => {
@@ -1258,7 +1280,7 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
       directionsRendererRef.current = null;
     }
     if (simulationTimerRef.current) {
-      clearInterval(simulationTimerRef.current);
+      clearTimeout(simulationTimerRef.current);
       simulationTimerRef.current = null;
     }
     routeCoordsRef.current = [];
@@ -1271,29 +1293,30 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
     setNavHeading(0);
   }, []);
 
-  const simulationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const simulationTimerRef = useRef<any>(null);
 
   const simulateDrive = useCallback(() => {
     const coords = routeCoordsRef.current;
     if (coords.length === 0) return;
 
     let idx = 0;
-    const step = Math.max(1, Math.floor(coords.length / 250));
-    const intervalMs = 150;
+    const step = 1;
 
-    if (simulationTimerRef.current) clearInterval(simulationTimerRef.current);
+    if (simulationTimerRef.current) clearTimeout(simulationTimerRef.current);
     prevSimCoordRef.current = coords[0];
 
     speakTurkish('Simülasyon başlatılıyor. Rota üzerinde ilerleniyor.');
 
-    simulationTimerRef.current = setInterval(() => {
+    const runStep = () => {
       if (idx >= coords.length) {
-        if (simulationTimerRef.current) clearInterval(simulationTimerRef.current);
+        if (simulationTimerRef.current) clearTimeout(simulationTimerRef.current);
         speakTurkish('Hedefinize ulaştınız! Navigasyon tamamlandı.');
         setNavSpeed(0);
         return;
       }
+      
       const [lat, lng] = coords[idx];
+      let timeMs = 150;
 
       // Yön ve hız hesapla
       if (prevSimCoordRef.current) {
@@ -1302,11 +1325,16 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
         setNavHeading(bearing);
         updateCarIcon(bearing);
 
-        // Simülasyon hızı hesapla (mesafe/zaman)
         const distKm = kmBetween(pLat, pLng, lat, lng);
-        const simSpeedKmh = Math.round((distKm / (intervalMs / 1000)) * 3600); // km/h
-        const clampedSpeed = Math.min(simSpeedKmh, 130); // Max 130 km/h
-        setNavSpeed(clampedSpeed > 2 ? clampedSpeed : 0);
+        // Simülasyon hızını test için biraz daha makul bir seviyeye (160 km/h) çıkarıyoruz
+        const speedKmh = 160;
+        const timeHours = distKm / speedKmh;
+        timeMs = timeHours * 3600 * 1000;
+        
+        // Smooth animasyon için limitleri düşür (min 16ms = ~60 FPS)
+        timeMs = Math.max(16, Math.min(timeMs, 1000));
+        
+        setNavSpeed(distKm > 0.0001 ? speedKmh : 0);
       }
       prevSimCoordRef.current = [lat, lng];
 
@@ -1328,11 +1356,25 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
         if (i <= lastSpokenIndexRef.current) continue;
         const inst = instructions[i];
         if (!inst || !inst.text) continue;
+        
         const coordIdx = inst.index;
-        if (coordIdx !== undefined && coordIdx < coords.length) {
-          const [iLat, iLng] = coords[coordIdx];
-          const dist = kmBetween(lat, lng, iLat, iLng) * 1000;
-          if (dist < 200) {
+        if (coordIdx !== undefined) {
+          const turnCoords = coords[coordIdx];
+          if (!turnCoords) continue;
+
+          const distToTurn = kmBetween(lat, lng, turnCoords[0], turnCoords[1]) * 1000;
+          
+          // Google Maps tarzı önceden uyarı (yaklaşık 350m kala)
+          if (distToTurn <= 350 && distToTurn >= 50 && idx < coordIdx) {
+            if (!inst.warned && !inst.text.includes('Rotada ilerleyin') && !inst.text.includes('Hedefinize ulaştınız')) {
+              inst.warned = true;
+              const roundedDist = Math.round(distToTurn / 50) * 50;
+              const trText = translateInstruction(`${roundedDist} metre sonra ${inst.text.toLocaleLowerCase('tr-TR')}`);
+              speakTurkish(trText);
+              break;
+            }
+          } else if (idx >= coordIdx - 1) {
+            // Tam manevra noktasına gelindiğinde asıl anons
             const trText = translateInstruction(inst.text);
             speakTurkish(trText);
             lastSpokenIndexRef.current = i;
@@ -1342,12 +1384,15 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
       }
 
       idx += step;
-    }, intervalMs);
+      simulationTimerRef.current = setTimeout(runStep, timeMs);
+    };
+
+    runStep();
   }, [speakTurkish, translateInstruction, calcBearing, updateCarIcon]);
 
   useEffect(() => {
     (window as any).startNavigation = (stationId: string) => {
-      const station = stations.find(s => s.id === stationId);
+      const station = stations.find(s => String(s.id) === String(stationId));
       if (!station) return;
 
       const doRouting = (loc: { lat: number, lng: number }) => {
@@ -1431,37 +1476,90 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
         map.setCenter({ lat: loc.lat, lng: loc.lng });
         map.setZoom(16);
 
-        const service = new google.maps.DirectionsService();
-        service.route(
-          {
-            origin: { lat: loc.lat, lng: loc.lng },
-            destination: { lat: station.lat, lng: station.lng },
-            travelMode: google.maps.TravelMode.DRIVING,
-          },
-          (result: any, status: any) => {
-            if (status === google.maps.DirectionsStatus.OK && result) {
-              directionsRendererRef.current.setDirections(result);
+        // OSRM tabanlı açık kaynak rota hesaplayıcısı (Google Maps faturalandırma hatasını aşmak için)
+        fetch(`https://router.project-osrm.org/route/v1/driving/${loc.lng},${loc.lat};${station.lng},${station.lat}?overview=full&geometries=geojson&steps=true`)
+          .then(res => res.json())
+          .then(data => {
+            if (data.code === 'Ok' && data.routes && data.routes.length > 0) {
+              const route = data.routes[0];
+              const rawCoords: [number, number][] = route.geometry.coordinates.map((c: any) => [c[1], c[0]]);
 
-              const route = result.routes[0];
-              const leg = route.legs[0];
-
+              // Daha smooth simülasyon için koordinat noktalarını ~2 metrede bir olacak şekilde sıklaştıralım (Interpolasyon)
               const pathCoords: [number, number][] = [];
-              leg.steps.forEach((step: any) => {
-                step.path.forEach((latLng: any) => {
-                  pathCoords.push([latLng.lat(), latLng.lng()]);
-                });
+              rawCoords.forEach((coord, i) => {
+                if (i === 0) {
+                  pathCoords.push(coord);
+                  return;
+                }
+                const prev = rawCoords[i - 1];
+                const distKm = kmBetween(prev[0], prev[1], coord[0], coord[1]);
+                if (distKm > 0.002) {
+                  const steps = Math.ceil(distKm / 0.002);
+                  for (let j = 1; j <= steps; j++) {
+                    const fraction = j / steps;
+                    const lat = prev[0] + (coord[0] - prev[0]) * fraction;
+                    const lng = prev[1] + (coord[1] - prev[1]) * fraction;
+                    pathCoords.push([lat, lng]);
+                  }
+                } else {
+                  pathCoords.push(coord);
+                }
               });
-              routeCoordsRef.current = pathCoords;
 
-              routeInstructionsRef.current = leg.steps.map((step: any) => ({
-                text: step.instructions.replace(/<[^>]*>/g, ''),
-                index: pathCoords.findIndex(c => Math.abs(c[0] - step.start_location.lat()) < 0.001 && Math.abs(c[1] - step.start_location.lng()) < 0.001) || 0,
-              }));
+              if (directionsRendererRef.current) directionsRendererRef.current.setMap(null);
+              // Use Polyline directly
+              directionsRendererRef.current = new google.maps.Polyline({
+                path: rawCoords.map(c => ({ lat: c[0], lng: c[1] })), // Çizim için orjinal noktalar yeterli
+                geodesic: true,
+                strokeColor: '#2dd4bf',
+                strokeOpacity: 0.9,
+                strokeWeight: 6,
+                map: map
+              }) as any;
+
+              routeCoordsRef.current = pathCoords;
+              
+              const instructions: any[] = [];
+              if (route.legs && route.legs[0] && route.legs[0].steps) {
+                route.legs[0].steps.forEach((step: any) => {
+                  let text = "";
+                  const type = step.maneuver.type;
+                  const modifier = step.maneuver.modifier;
+                  if (type === 'turn') {
+                    if (modifier === 'left') text = "Sola dönün";
+                    else if (modifier === 'right') text = "Sağa dönün";
+                    else if (modifier === 'sharp left') text = "Keskin sola dönün";
+                    else if (modifier === 'sharp right') text = "Keskin sağa dönün";
+                    else if (modifier === 'slight left') text = "Hafif sola dönün";
+                    else if (modifier === 'slight right') text = "Hafif sağa dönün";
+                    else if (modifier === 'uturn') text = "U dönüşü yapın";
+                    else text = "Dönüş yapın";
+                  } else if (type === 'roundabout' || type === 'rotary') {
+                    if (step.maneuver.exit) text = `Kavşaktan ${step.maneuver.exit}. çıkıştan çıkın`;
+                    else text = "Kavşaktan çıkın";
+                  } else if (type === 'arrive') text = "Hedefinize ulaştınız";
+                  else if (type === 'depart') text = "Rotada ilerleyin";
+                  else if (type === 'continue') text = "Düz devam edin";
+                  else if (type === 'fork') text = modifier?.includes('left') ? "Soldan ayrılın" : "Sağdan ayrılın";
+                  else if (type === 'merge') text = "Ana yola bağlanın";
+                  else if (type === 'on ramp') text = "Otobana girin";
+                  else if (type === 'off ramp') text = "Otobandan çıkın";
+                  else if (type === 'new name') text = "";
+                  else if (type === 'use lane') text = "Şeridinizi koruyun";
+                  else if (type === 'end of road') text = modifier?.includes('left') ? "Yolun sonundan sola dönün" : "Yolun sonundan sağa dönün";
+                  else text = "";
+
+                  instructions.push({
+                    text: text,
+                    index: step.geometry?.coordinates && step.geometry.coordinates.length > 0 ? Math.max(0, pathCoords.findIndex(c => Math.abs(c[0] - step.geometry.coordinates[0][1]) < 0.001 && Math.abs(c[1] - step.geometry.coordinates[0][0]) < 0.001)) : 0
+                  });
+                });
+              }
+              routeInstructionsRef.current = instructions;
 
               setNavActive(true);
-
-              const totalDist = leg.distance?.text || '';
-              const totalTime = leg.duration?.text || '';
+              const totalDist = (route.distance / 1000).toFixed(1) + ' km';
+              const totalTime = Math.ceil(route.duration / 60) + ' dk';
               speakTurkish(`Navigasyon başlatıldı. Toplam mesafe ${totalDist}, tahmini süre ${totalTime}.`);
 
               if (navigator.geolocation) {
@@ -1507,9 +1605,14 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
                   { enableHighAccuracy: true, timeout: 5000, maximumAge: 1000 }
                 );
               }
+            } else {
+              speakTurkish("Rota hesaplanamadı.");
             }
-          }
-        );
+          })
+          .catch(err => {
+            console.error("OSRM error:", err);
+            speakTurkish("Ağ hatası nedeniyle rota alınamadı.");
+          });
 
         if (infoWindowRef.current) infoWindowRef.current.close();
       };
@@ -1600,87 +1703,124 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
     mapRef.current = map;
 
     if (layerControlsRef.current) {
-      map.controls[google.maps.ControlPosition.BOTTOM_RIGHT].push(layerControlsRef.current);
+      map.controls[google.maps.ControlPosition.TOP_RIGHT].push(layerControlsRef.current);
     }
+
+    map.addListener('dragend', () => {
+      const c = map.getCenter();
+      if (c) setMapCenterState({ lat: c.lat(), lng: c.lng() });
+    });
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !userLocation) return;
+    
+    if (!userMarkerRef.current) {
+      userMarkerRef.current = new google.maps.Marker({
+        map,
+        position: userLocation,
+        icon: {
+          path: google.maps.SymbolPath.CIRCLE,
+          scale: 8,
+          fillColor: '#3b82f6',
+          fillOpacity: 1,
+          strokeColor: '#ffffff',
+          strokeWeight: 2,
+        },
+        title: "Konumunuz",
+        zIndex: 9999
+      });
+    } else {
+      userMarkerRef.current.setPosition(userLocation);
+    }
+  }, [userLocation, loading]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || loading) return;
 
     const renderMarkers = () => {
-      const bounds = map.getBounds();
-      if (!bounds) return;
+      if (!markerClustererRef.current) {
+        markerClustererRef.current = new MarkerClusterer({ 
+          map,
+          algorithm: new SuperClusterAlgorithm({ maxZoom: 14, radius: 60 }),
+          renderer: {
+            render: (cluster: any) => {
+              const count = cluster.count;
+              const position = cluster.position;
+              
+              // Premium renk skalası (Sayıya göre Neon Mavi -> Neon Mor)
+              const size = count < 10 ? 38 : count < 50 ? 46 : count < 100 ? 54 : 62;
+              const bgColor = count < 10 ? '#38bdf8' : count < 50 ? '#818cf8' : count < 100 ? '#c084fc' : '#e879f9';
+              
+              const svg = `
+                <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+                  <defs>
+                    <filter id="glow">
+                      <feGaussianBlur stdDeviation="2.5" result="coloredBlur"/>
+                      <feMerge>
+                        <feMergeNode in="coloredBlur"/>
+                        <feMergeNode in="SourceGraphic"/>
+                      </feMerge>
+                    </filter>
+                  </defs>
+                  <!-- Arka plan siyahımsı cam efekti -->
+                  <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 5}" fill="#0f172a" fill-opacity="0.9" />
+                  <!-- Neon parlak kenarlık -->
+                  <circle cx="${size/2}" cy="${size/2}" r="${size/2 - 5}" fill="none" stroke="${bgColor}" stroke-width="2.5" filter="url(#glow)"/>
+                  <!-- Temiz, şık font -->
+                  <text x="50%" y="51%" dominant-baseline="middle" text-anchor="middle" fill="#ffffff" font-family="Inter, sans-serif" font-weight="700" font-size="${size < 46 ? 13 : 15}">${count}</text>
+                </svg>
+              `;
 
-      const zoom = map.getZoom() || 6;
-
-      // 1. Determine stations that should be visible (cap to keep DOM light and responsive)
-      const visibleStations: Station[] = [];
-      const maxRenderLimit = zoom < 11 ? 500 : 250;
-
-      for (const station of filtered) {
-        const pt = new google.maps.LatLng(station.lat, station.lng);
-        if (bounds.contains(pt)) {
-          visibleStations.push(station);
-          if (visibleStations.length >= maxRenderLimit) {
-            break;
+              return new google.maps.Marker({
+                position,
+                icon: {
+                  url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg.trim()),
+                  scaledSize: new google.maps.Size(size, size),
+                  anchor: new google.maps.Point(size / 2, size / 2)
+                },
+                zIndex: 9998
+              });
+            }
           }
-        }
+        });
       }
 
-      // Create a set of visible IDs for fast O(1) diffing
-      const visibleIds = new Set(visibleStations.map(s => s.id));
+      const currentFilteredIds = new Set(filtered.map(s => String(s.id)));
 
-      // 2. Remove markers that are no longer inside the viewport
+      const markersToRemove: any[] = [];
       markerByIdRef.current.forEach((marker, id) => {
-        if (!visibleIds.has(id)) {
-          marker.setMap(null);
+        if (!currentFilteredIds.has(String(id))) {
+          markersToRemove.push(marker);
           markerByIdRef.current.delete(id);
         }
       });
+      if (markersToRemove.length > 0) {
+        markerClustererRef.current.removeMarkers(markersToRemove);
+      }
 
-      // 3. Add or reuse markers for visible stations
-      visibleStations.forEach((station) => {
-        // If already rendered, reuse it directly (no tear-down/re-create lag!)
-        if (markerByIdRef.current.has(station.id)) {
-          return;
-        }
+      const markersToAdd: any[] = [];
+      filtered.forEach((station) => {
+        if (markerByIdRef.current.has(station.id)) return;
 
         const color = station.isGreen ? '#10b981' : station.maxPower >= 100 ? '#f59e0b' : '#3b82f6';
-        let marker: any;
-
-        if (zoom < 11) {
-          marker = new google.maps.Marker({
-            position: { lat: station.lat, lng: station.lng },
-            map: map,
-            icon: {
-              path: google.maps.SymbolPath.CIRCLE,
-              scale: 4,
-              fillColor: color,
-              fillOpacity: 0.9,
-              strokeColor: '#ffffff',
-              strokeWeight: 1,
-            },
-          });
-        } else {
-          // Sleek, compact and lightweight modern vector pin without CPU-heavy filters
-          const svgIcon = `
+        const svgIcon = `
 <svg width="26" height="34" viewBox="0 0 26 34" xmlns="http://www.w3.org/2000/svg">
   <path d="M13 0C5.82 0 0 5.82 0 13c0 9.75 13 21 13 21s13-11.25 13-21C26 5.82 20.18 0 13 0z" fill="${color}"/>
   <circle cx="13" cy="12" r="7.5" fill="#ffffff"/>
   <path d="M12.5 7L9.5 12h3v4.5l4-5.5h-3.5L12.5 7z" fill="${color}"/>
 </svg>
 `;
-          marker = new google.maps.Marker({
-            position: { lat: station.lat, lng: station.lng },
-            map: map,
-            icon: {
-              url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svgIcon.trim()),
-              scaledSize: new google.maps.Size(26, 34),
-              anchor: new google.maps.Point(13, 34),
-            },
-          });
-        }
+        const marker = new google.maps.Marker({
+          position: { lat: station.lat, lng: station.lng },
+          icon: {
+            url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svgIcon.trim()),
+            scaledSize: new google.maps.Size(26, 34),
+            anchor: new google.maps.Point(13, 34),
+          },
+        });
 
         const priceHTML = (station.acPrice || station.dcPrice)
           ? `<div style="margin-top:6px;font-size:12px;display:flex;gap:8px">
@@ -1709,10 +1849,13 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
         });
 
         markerByIdRef.current.set(station.id, marker);
+        markersToAdd.push(marker);
       });
-    };
 
-    const listener = map.addListener('idle', renderMarkers);
+      if (markersToAdd.length > 0) {
+        markerClustererRef.current.addMarkers(markersToAdd);
+      }
+    };
 
     // Render immediately on filter/search changes so markers update instantly
     renderMarkers();
@@ -1723,23 +1866,10 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
         map.setZoom(11);
         hasCenteredRef.current = true;
       } else if (!userLocation && !hasCenteredRef.current) {
-        const fitSample = filteredByGeoFilters.slice(0, 12_000);
-        if (fitSample.length >= 2) {
-          const boundsObj = new google.maps.LatLngBounds();
-          fitSample.forEach((s) => boundsObj.extend({ lat: s.lat, lng: s.lng }));
-          map.fitBounds(boundsObj);
-
-          const maxZoomListener = map.addListener('bounds_changed', () => {
-            if (map.getZoom() > 14) map.setZoom(14);
-            google.maps.event.removeListener(maxZoomListener);
-          });
-        } else if (fitSample.length === 1) {
-          map.setCenter({ lat: fitSample[0].lat, lng: fitSample[0].lng });
-          map.setZoom(14);
-        } else {
-          map.setCenter({ lat: TURKEY_CENTER[0], lng: TURKEY_CENTER[1] });
-          map.setZoom(6);
-        }
+        // Kullanıcı konumu henüz yoksa harita Türkiye merkezinde başlar, 
+        // sonrasında GPS geldiğinde zıplar. Ancak localStorage sayesinde bu 
+        // blok sadece ilk giren kullanıcılarda çalışacaktır.
+        hasCenteredRef.current = true; 
       }
     }
 
@@ -1758,11 +1888,9 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
     }
 
     return () => {
-      google.maps.event.removeListener(listener);
-      // Clean up all markers from the map when search/filters change to prevent ghost or mixed up markers
-      markerByIdRef.current.forEach((marker) => {
-        marker.setMap(null);
-      });
+      if (markerClustererRef.current) {
+        markerClustererRef.current.clearMarkers();
+      }
       markerByIdRef.current.clear();
     };
   }, [
@@ -1835,6 +1963,18 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
               {t('map_private', lang)}
             </button>
           </div>
+          <div className="filter-label" style={{ marginTop: 12 }}>Soket Tipi</div>
+          <div className="chip-row">
+             <button type="button" className={`chip ${acDcFilter === 'all' ? 'active' : ''}`} onClick={() => setAcDcFilter('all')}>
+              Tümü
+            </button>
+            <button type="button" className={`chip ${acDcFilter === 'AC' ? 'active' : ''}`} onClick={() => setAcDcFilter('AC')}>
+              AC
+            </button>
+            <button type="button" className={`chip ${acDcFilter === 'DC' ? 'active' : ''}`} onClick={() => setAcDcFilter('DC')}>
+              DC
+            </button>
+          </div>
           <div className="filter-label" style={{ marginTop: 12 }}>{t('map_filter_dist', lang)}</div>
           <div className="chip-row">
             {([30, 50, 100] as const).map((km) => (
@@ -1842,7 +1982,10 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
                 key={km}
                 type="button"
                 className={`chip ${radiusKm === km ? 'active' : ''}`}
-                onClick={() => setRadiusKm(km)}
+                onClick={() => {
+                  setRadiusKm(km);
+                  if (!userLocation) requestLocation(true);
+                }}
               >
                 {km} km
               </button>
@@ -2036,69 +2179,71 @@ function RoutePlannerPage({ theme }: { theme: 'light' | 'dark' }) {
   const mapHostRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const directionsRendererRef = useRef<any>(null);
-  const markersRef = useRef<any[]>([]);
+  const markersRef = useRef<any[]>(null);
+  const originMarkerRef = useRef<any>(null);
+  const destMarkerRef = useRef<any>(null);
+  const searchTimeoutRef = useRef<any>(null);
 
-  const [origin, setOrigin] = useState('');
   const [destination, setDestination] = useState('');
-  const [originCoords, setOriginCoords] = useState<[number, number] | null>(null);
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [originCoords, setOriginCoords] = useState<[number, number] | null>(() => {
+    try {
+      const saved = localStorage.getItem('lastLocation');
+      if (saved) { const p = JSON.parse(saved); return [p.lat, p.lng]; }
+    } catch {}
+    return null;
+  });
   const [destinationCoords, setDestinationCoords] = useState<[number, number] | null>(null);
   const [loading, setLoading] = useState(false);
   const [stations, setStations] = useState<Station[]>([]);
   const [routeStations, setRouteStations] = useState<Station[]>([]);
-  const [maxDistanceKm, setMaxDistanceKm] = useState(10); // Find stations within 10km of route
-  const [triggerRoute, setTriggerRoute] = useState(false);
+  const [routeInfo, setRouteInfo] = useState<{ distanceKm: number; durationMin: number } | null>(null);
+  const maxDistanceKm = 2; // Sadece yol üstündeki istasyonları göster (2km yarıçap)
 
   const [mapType, setMapType] = useState<'roadmap' | 'hybrid'>('roadmap');
   const [showTraffic, setShowTraffic] = useState(false);
   const trafficLayerRef = useRef<any>(null);
   const layerControlsRef = useRef<HTMLDivElement | null>(null);
 
-  // Dynamic Map Layer and Traffic updates
+  // Map layer + traffic
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-
     map.setMapTypeId(mapType);
-
     if (showTraffic) {
-      if (!trafficLayerRef.current) {
-        trafficLayerRef.current = new google.maps.TrafficLayer();
-      }
+      if (!trafficLayerRef.current) trafficLayerRef.current = new google.maps.TrafficLayer();
       trafficLayerRef.current.setMap(map);
     } else {
-      if (trafficLayerRef.current) {
-        trafficLayerRef.current.setMap(null);
-      }
+      if (trafficLayerRef.current) trafficLayerRef.current.setMap(null);
     }
   }, [mapType, showTraffic]);
 
+  // Load stations + auto GPS
   useEffect(() => {
-    getStations().then((data) => setStations(data));
-
-    // Auto-request location on load
+    getStations().then(d => setStations(d));
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition((pos) => {
         setOriginCoords([pos.coords.latitude, pos.coords.longitude]);
-        setOrigin(lang === 'tr' ? "Mevcut Konum" : "Current Location");
-      }, () => {
-        // Silently fail if blocked or not found automatically
-      });
+      }, () => {});
     }
   }, []);
 
   useEffect(() => {
     if (mapRef.current) {
-      mapRef.current.setOptions({
-        styles: theme === 'dark' ? GOOGLE_MAPS_DARK_STYLE : [],
-      });
+      mapRef.current.setOptions({ styles: theme === 'dark' ? GOOGLE_MAPS_DARK_STYLE : [] });
     }
   }, [theme]);
 
+  // Init map
   useEffect(() => {
     if (!mapHostRef.current) return;
+    const initCenter = originCoords
+      ? { lat: originCoords[0], lng: originCoords[1] }
+      : { lat: TURKEY_CENTER[0], lng: TURKEY_CENTER[1] };
     const map = new google.maps.Map(mapHostRef.current, {
-      center: { lat: TURKEY_CENTER[0], lng: TURKEY_CENTER[1] },
-      zoom: 6,
+      center: initCenter,
+      zoom: originCoords ? 11 : 6,
       zoomControl: true,
       mapTypeControl: false,
       streetViewControl: false,
@@ -2106,320 +2251,326 @@ function RoutePlannerPage({ theme }: { theme: 'light' | 'dark' }) {
       styles: theme === 'dark' ? GOOGLE_MAPS_DARK_STYLE : [],
     });
     mapRef.current = map;
-
     if (layerControlsRef.current) {
-      map.controls[google.maps.ControlPosition.BOTTOM_RIGHT].push(layerControlsRef.current);
+      map.controls[google.maps.ControlPosition.TOP_RIGHT].push(layerControlsRef.current);
     }
 
+    // Haritaya tıklayınca hedef seç
     map.addListener('click', (e: any) => {
       if (e.latLng) {
-        setDestinationCoords([e.latLng.lat(), e.latLng.lng()]);
-        setDestination("Haritadan Seçildi");
-        setTriggerRoute(true);
+        const lat = e.latLng.lat();
+        const lng = e.latLng.lng();
+        setDestinationCoords([lat, lng]);
+        setDestination(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
+        setSuggestions([]);
+        setShowSuggestions(false);
       }
     });
 
-    return () => {
-      mapRef.current = null;
-    };
+    // Konumu işaretle
+    if (originCoords) {
+      originMarkerRef.current = new google.maps.Marker({
+        position: { lat: originCoords[0], lng: originCoords[1] },
+        map,
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: '#3b82f6', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 },
+        title: 'Konumunuz', zIndex: 9999,
+      });
+    }
+
+    return () => { mapRef.current = null; };
   }, []);
 
+  // Hedef coords değiştiğinde otomatik rota hesapla
   useEffect(() => {
-    if (triggerRoute) {
-      setTriggerRoute(false);
-      calculateRoute();
+    if (destinationCoords && originCoords) {
+      runRoute(originCoords, destinationCoords);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [triggerRoute]);
+  }, [destinationCoords]);
 
-  const getUserLocation = () => {
-    if (!navigator.geolocation) {
-      alert("Tarayıcınız konum servisini desteklemiyor.");
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setOriginCoords([pos.coords.latitude, pos.coords.longitude]);
-        setOrigin("Mevcut Konum");
-      },
-      () => alert("Konum alınamadı.")
-    );
+  // Autocomplete search with Nominatim
+  const handleSearchChange = (val: string) => {
+    setDestination(val);
+    setDestinationCoords(null);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    if (val.length < 3) { setSuggestions([]); setShowSuggestions(false); return; }
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(val)}&countrycodes=tr&limit=5&accept-language=tr`);
+        const data = await res.json();
+        setSuggestions(data || []);
+        setShowSuggestions(true);
+      } catch { setSuggestions([]); }
+    }, 400);
+  };
+
+  const selectSuggestion = (s: any) => {
+    setDestination(s.display_name.split(',').slice(0, 2).join(','));
+    setDestinationCoords([parseFloat(s.lat), parseFloat(s.lon)]);
+    setSuggestions([]);
+    setShowSuggestions(false);
   };
 
   const drawStations = (pts: Station[]) => {
-    // Clear old markers
-    markersRef.current.forEach(m => m.setMap(null));
+    if (markersRef.current) markersRef.current.forEach(m => m.setMap(null));
     markersRef.current = [];
-
-    pts.forEach(s => {
-      const color = s.isGreen ? '#22c55e' : s.maxPower >= 100 ? '#f59e0b' : '#9ca3af';
-      const svgIcon = `
-<svg width="40" height="52" viewBox="0 0 40 52" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <filter id="shadow-route-${s.id}" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.3"/>
-    </filter>
-  </defs>
-  <path d="M20 2C10.06 2 2 10.06 2 20c0 10.5 18 30 18 30s18-19.5 18-30C38 10.06 29.94 2 20 2z" fill="${color}" filter="url(#shadow-route-${s.id})"/>
-  <circle cx="20" cy="20" r="10" fill="#fff"/>
-  <g transform="translate(14, 14)">
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="${color}">
-      <path d="M16 4h-1V2h-2v2h-2V2H9v2H8C6.9 4 6 4.9 6 6v14c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-3.5 13H11v-3.5H9L12.5 7v3.5H15L11.5 17z"/>
-    </svg>
-  </g>
-</svg>
-`;
+    pts.forEach((s, idx) => {
+      const color = s.isGreen ? '#22c55e' : s.maxPower >= 100 ? '#f59e0b' : '#818cf8';
+      const svg = `<svg width="32" height="42" viewBox="0 0 32 42" xmlns="http://www.w3.org/2000/svg"><path d="M16 1C7.72 1 1 7.72 1 16c0 9 15 25 15 25s15-16 15-25C31 7.72 24.28 1 16 1z" fill="${color}"/><circle cx="16" cy="16" r="9" fill="#fff"/><text x="16" y="20" text-anchor="middle" fill="${color}" font-size="11" font-weight="bold" font-family="Inter,sans-serif">${idx + 1}</text></svg>`;
+      const distText = originCoords ? kmBetween(originCoords[0], originCoords[1], s.lat, s.lng).toFixed(1) + ' km' : '';
       const marker = new google.maps.Marker({
-        position: { lat: s.lat, lng: s.lng },
-        map: mapRef.current,
-        icon: {
-          url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svgIcon),
-          scaledSize: new google.maps.Size(40, 52),
-          anchor: new google.maps.Point(20, 50),
-        }
+        position: { lat: s.lat, lng: s.lng }, map: mapRef.current,
+        icon: { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), scaledSize: new google.maps.Size(32, 42), anchor: new google.maps.Point(16, 40) }
       });
-
       const info = new google.maps.InfoWindow({
-        content: `
-          <div style="color:#000; min-width: 180px;">
-            <h3 style="margin:0 0 5px 0; font-size:14px;">${s.name}</h3>
-            <div style="font-size:12px; margin-bottom:4px;">${s.brand} • ${s.serviceType}</div>
-            <div style="font-size:12px; opacity:0.8; margin-bottom:8px;">${s.city}</div>
-            ${s.acPrice ? `<div style="font-size:12px;">AC: ${s.acPrice}₺</div>` : ''}
-            ${s.dcPrice ? `<div style="font-size:12px;">DC: ${s.dcPrice}₺</div>` : ''}
-          </div>
-        `
+        content: `<div style="color:#000;min-width:200px;font-family:Inter,sans-serif"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><strong style="font-size:13px">${s.name}</strong>${distText ? `<span style="background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">${distText}</span>` : ''}</div><div style="font-size:11px;color:#666;margin-bottom:4px">${s.brand} • ${s.city}</div><div style="font-size:11px;color:#888;margin-bottom:6px">${s.socketCount} soket • Max ${s.maxPower} kW</div><a href="/map?id=${s.id}&nav=true" style="display:block;text-align:center;padding:7px;background:#2dd4bf;color:#000;border-radius:6px;font-weight:600;font-size:12px;text-decoration:none">Navigasyonu Başlat</a></div>`
       });
-
-      marker.addListener('click', () => {
-        info.open(mapRef.current, marker);
-      });
-
-      markersRef.current.push(marker);
+      marker.addListener('click', () => info.open(mapRef.current, marker));
+      markersRef.current!.push(marker);
     });
   };
 
-  const geocode = async (query: string): Promise<[number, number] | null> => {
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
-      const data = await res.json();
-      if (data && data.length > 0) {
-        return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
-      }
-    } catch {
-      // omit
-    }
-    return null;
-  };
-
-  const calculateRoute = async () => {
-    if (!origin || !destination) return;
-    if (!mapRef.current) return;
+  const runRoute = async (start: [number, number], end: [number, number]) => {
     setLoading(true);
+    setRouteStations([]);
+    setRouteInfo(null);
 
-    const startLoc = originCoords || await geocode(origin);
-    const endLoc = destinationCoords || await geocode(destination);
+    // Eski rota + marker temizle
+    if (directionsRendererRef.current) directionsRendererRef.current.setMap(null);
+    if (destMarkerRef.current) destMarkerRef.current.setMap(null);
 
-    if (!startLoc || !endLoc) {
-      alert(lang === 'tr' ? "Lokasyon bulunamadı. Lütfen daha açık bir adres girin." : "Location not found. Please enter a more specific address.");
+    try {
+      const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${start[1]},${start[0]};${end[1]},${end[0]}?overview=full&geometries=geojson`);
+      const data = await res.json();
       setLoading(false);
-      return;
-    }
 
-    setOriginCoords(startLoc);
-    setDestinationCoords(endLoc);
-
-    if (directionsRendererRef.current) {
-      directionsRendererRef.current.setMap(null);
-    }
-
-    directionsRendererRef.current = new google.maps.DirectionsRenderer({
-      map: mapRef.current,
-      polylineOptions: {
-        strokeColor: '#38bdf8',
-        strokeWeight: 4,
-        strokeOpacity: 0.8
+      if (data.code !== 'Ok' || !data.routes?.length) {
+        alert(lang === 'tr' ? 'Rota bulunamadı.' : 'Route not found.');
+        return;
       }
-    });
 
-    const service = new google.maps.DirectionsService();
-    service.route({
-      origin: { lat: startLoc[0], lng: startLoc[1] },
-      destination: { lat: endLoc[0], lng: endLoc[1] },
-      travelMode: google.maps.TravelMode.DRIVING
-    }, (result: any, status: any) => {
+      const route = data.routes[0];
+      const rawCoords: [number, number][] = route.geometry.coordinates.map((c: any) => [c[1], c[0]]);
+
+      // Rota bilgisi
+      setRouteInfo({
+        distanceKm: Math.round(route.distance / 1000 * 10) / 10,
+        durationMin: Math.round(route.duration / 60),
+      });
+
+      // Polyline çiz
+      directionsRendererRef.current = new google.maps.Polyline({
+        path: rawCoords.map(c => ({ lat: c[0], lng: c[1] })),
+        geodesic: true, strokeColor: '#38bdf8', strokeWeight: 5, strokeOpacity: 0.85, map: mapRef.current,
+      }) as any;
+
+      // Hedef marker
+      destMarkerRef.current = new google.maps.Marker({
+        position: { lat: end[0], lng: end[1] }, map: mapRef.current,
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 10, fillColor: '#ef4444', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 },
+        title: 'Hedef', zIndex: 9998,
+      });
+
+      // Haritayı rotaya odakla
+      if (mapRef.current) {
+        const b = new google.maps.LatLngBounds();
+        rawCoords.forEach(c => b.extend({ lat: c[0], lng: c[1] }));
+        mapRef.current.fitBounds(b);
+      }
+
+      // Güzergah üzerindeki istasyonları bul (sıkı filtre: sadece yol üstü)
+      const lats = rawCoords.map(c => c[0]);
+      const lngs = rawCoords.map(c => c[1]);
+      const minLat = Math.min(...lats) - 0.03;
+      const maxLat = Math.max(...lats) + 0.03;
+      const minLng = Math.min(...lngs) - 0.03;
+      const maxLng = Math.max(...lngs) + 0.03;
+      const candidates = stations.filter(s =>
+        s.lat >= minLat && s.lat <= maxLat && s.lng >= minLng && s.lng <= maxLng
+      );
+      // Daha sık örnekleme ile sadece gerçekten yol üstündekileri yakala
+      const sampleStep = Math.max(1, Math.floor(rawCoords.length / 500));
+      const nearby: Station[] = [];
+      for (const s of candidates) {
+        let minD = Infinity;
+        for (let i = 0; i < rawCoords.length; i += sampleStep) {
+          const d = kmBetween(s.lat, s.lng, rawCoords[i][0], rawCoords[i][1]);
+          if (d < minD) minD = d;
+          if (minD <= maxDistanceKm) break; // Erken çıkış optimizasyonu
+        }
+        if (minD <= maxDistanceKm) nearby.push(s);
+      }
+      nearby.sort((a, b) => kmBetween(a.lat, a.lng, start[0], start[1]) - kmBetween(b.lat, b.lng, start[0], start[1]));
+      setRouteStations(nearby);
+      drawStations(nearby);
+    } catch {
       setLoading(false);
-      if (status === google.maps.DirectionsStatus.OK && result) {
-        directionsRendererRef.current.setDirections(result);
-
-        const route = result.routes[0];
-        const leg = route.legs[0];
-
-        const coords: { lat: number, lng: number }[] = [];
-        leg.steps.forEach((step: any) => {
-          step.path.forEach((latLng: any) => {
-            coords.push({ lat: latLng.lat(), lng: latLng.lng() });
-          });
-        });
-
-        // Bounding box filter for efficiency
-        const lats = coords.map(c => c.lat);
-        const lngs = coords.map(c => c.lng);
-        const minLat = Math.min(...lats) - 0.2;
-        const maxLat = Math.max(...lats) + 0.2;
-        const minLng = Math.min(...lngs) - 0.2;
-        const maxLng = Math.max(...lngs) + 0.2;
-
-        const candidateStations = stations.filter(s =>
-          s.lat >= minLat && s.lat <= maxLat && s.lng >= minLng && s.lng <= maxLng
-        );
-
-        // Find stations close to the route
-        const nearbyStations: Station[] = [];
-        for (const s of candidateStations) {
-          let minDistance = Infinity;
-          for (let i = 0; i < coords.length; i += Math.max(1, Math.floor(coords.length / 200))) {
-            const d = kmBetween(s.lat, s.lng, coords[i].lat, coords[i].lng);
-            if (d < minDistance) minDistance = d;
-          }
-          if (minDistance <= maxDistanceKm) {
-            nearbyStations.push(s);
-          }
-        }
-
-        // Sort stations by distance to startLoc (closest to furthest)
-        if (startLoc) {
-          nearbyStations.sort((a, b) => {
-            const distA = kmBetween(a.lat, a.lng, startLoc[0], startLoc[1]);
-            const distB = kmBetween(b.lat, b.lng, startLoc[0], startLoc[1]);
-            return distA - distB;
-          });
-        }
-
-        setRouteStations(nearbyStations);
-        drawStations(nearbyStations);
-      } else {
-        alert(lang === 'tr' ? "Rota hesaplanırken bir hata oluştu." : "An error occurred while calculating the route.");
-      }
-    });
+      alert(lang === 'tr' ? 'Rota servisine ulaşılamadı.' : 'Could not reach routing service.');
+    }
   };
 
   return (
-    <div style={{ height: 'calc(100vh - 72px)', display: 'flex', flexDirection: 'column', background: 'var(--bg-deep)', overflow: 'hidden' }}>
-      <div style={{ display: 'flex', height: '100%' }}>
-        {/* Sidebar */}
-        <div style={{ width: '350px', background: 'var(--bg-surface)', borderRight: '1px solid var(--border-subtle)', boxShadow: '4px 0 24px var(--shadow-sidebar)', display: 'flex', flexDirection: 'column', zIndex: 10 }}>
-          <div style={{ padding: '20px', borderBottom: '1px solid var(--border-subtle)' }}>
-            <h2 style={{ margin: '0 0 16px 0', fontSize: '1.25rem', color: 'var(--text-primary)' }}>{t('route_title', lang)}</h2>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <div>
-                <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '4px', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>{t('route_origin', lang)}</span>
-                  <button type="button" onClick={getUserLocation} style={{ background: 'none', border: 'none', color: '#38bdf8', cursor: 'pointer', fontSize: '0.75rem', padding: 0 }}>{t('route_my_loc', lang)}</button>
-                </label>
-                <input
-                  type="text"
-                  value={origin}
-                  onChange={e => { setOrigin(e.target.value); setOriginCoords(null); }}
-                  placeholder={t('route_origin_ph', lang)}
-                  style={{ width: '100%', padding: '10px', borderRadius: '6px', background: 'var(--bg-deep)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>{t('route_dest', lang)}</label>
-                <input
-                  type="text"
-                  value={destination}
-                  onChange={e => { setDestination(e.target.value); setDestinationCoords(null); }}
-                  placeholder={t('route_dest_ph', lang)}
-                  style={{ width: '100%', padding: '10px', borderRadius: '6px', background: 'var(--bg-deep)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}
-                />
-              </div>
-              <div>
-                <label style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '4px', display: 'block' }}>{t('route_max_dist', lang)}</label>
-                <input
-                  type="number"
-                  value={maxDistanceKm}
-                  onChange={e => setMaxDistanceKm(Number(e.target.value))}
-                  min={1} max={50}
-                  style={{ width: '100%', padding: '10px', borderRadius: '6px', background: 'var(--bg-deep)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)' }}
-                />
-              </div>
-
-              <button
-                onClick={calculateRoute}
-                disabled={loading || stations.length === 0}
-                className="btn-primary"
-                style={{ width: '100%', marginTop: '8px', padding: '12px' }}
-              >
-                {loading ? t('route_calculating', lang) : t('route_calc', lang)}
-              </button>
+    <div style={{ height: 'calc(100vh - 72px)', display: 'flex', background: 'var(--bg-deep)', overflow: 'hidden' }}>
+      {/* Sidebar */}
+      <div style={{ width: '380px', background: 'var(--bg-surface)', borderRight: '1px solid var(--border-subtle)', boxShadow: '4px 0 24px var(--shadow-sidebar)', display: 'flex', flexDirection: 'column', zIndex: 10 }}>
+        
+        {/* Search Header */}
+        <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+            <span style={{ fontSize: '1.5rem' }}>🗺️</span>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '1.15rem', color: 'var(--text-primary)' }}>{t('route_title', lang)}</h2>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                {originCoords ? `📍 Konum algılandı` : '⏳ Konum bekleniyor...'}
+              </span>
             </div>
           </div>
 
-          <div style={{ flex: 1, overflowY: 'auto', padding: '20px' }}>
-            {routeStations.length > 0 ? (
-              <>
-                <h3 style={{ margin: '0 0 16px 0', fontSize: '1rem', color: 'var(--text-secondary)' }}>{t('route_stations_header', lang)} ({routeStations.length})</h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                  {routeStations.map(s => (
-                    <div key={s.id} style={{ background: 'var(--bg-deep)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
-                      <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '4px', color: 'var(--text-primary)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: '6px' }}>
-                        <span>{s.name}</span>
-                        {originCoords && (
-                          <span style={{ fontSize: '0.8rem', color: 'var(--accent-cyan)', fontWeight: 500, whiteSpace: 'nowrap' }}>
-                            {kmBetween(originCoords[0], originCoords[1], s.lat, s.lng).toFixed(1)} km
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{s.brand} • {s.city}</div>
-                      <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
-                        {s.isGreen && <span className="custom-tag tag-green">{t('map_green', lang).replace('🌿 ', '')}</span>}
-                        <span className="custom-tag tag-blue">{s.maxPower}kW</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', textAlign: 'center', marginTop: '20px' }}>
-                {t('route_empty', lang)}
+          {/* Tek search bar */}
+          <div style={{ position: 'relative' }}>
+            <div style={{ position: 'relative' }}>
+              <span style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', fontSize: '1rem', opacity: 0.5 }}>🔍</span>
+              <input
+                type="text"
+                value={destination}
+                onChange={e => handleSearchChange(e.target.value)}
+                onFocus={() => { if (suggestions.length > 0) setShowSuggestions(true); }}
+                placeholder={lang === 'tr' ? 'Nereye gitmek istiyorsunuz?' : 'Where do you want to go?'}
+                style={{ width: '100%', padding: '12px 12px 12px 38px', borderRadius: '10px', background: 'var(--bg-deep)', border: '1px solid var(--border-subtle)', color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none', transition: 'border-color 0.2s' }}
+                onKeyDown={e => { if (e.key === 'Enter' && suggestions.length > 0) selectSuggestion(suggestions[0]); }}
+              />
+            </div>
+
+            {/* Autocomplete dropdown */}
+            {showSuggestions && suggestions.length > 0 && (
+              <div style={{ position: 'absolute', top: '100%', left: 0, right: 0, marginTop: '4px', background: 'var(--bg-surface)', border: '1px solid var(--border-subtle)', borderRadius: '10px', overflow: 'hidden', zIndex: 999, boxShadow: '0 8px 32px rgba(0,0,0,0.25)' }}>
+                {suggestions.map((s: any, i: number) => (
+                  <div key={i}
+                    onClick={() => selectSuggestion(s)}
+                    style={{ padding: '10px 14px', cursor: 'pointer', borderBottom: i < suggestions.length - 1 ? '1px solid var(--border-subtle)' : 'none', fontSize: '0.82rem', color: 'var(--text-primary)', transition: 'background 0.15s', display: 'flex', alignItems: 'center', gap: '8px' }}
+                    onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-deep)')}
+                    onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                  >
+                    <span style={{ opacity: 0.5 }}>📍</span>
+                    <span>{s.display_name}</span>
+                  </div>
+                ))}
               </div>
             )}
           </div>
+
+          <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '8px', textAlign: 'center' }}>
+            💡 Haritaya tıklayarak da hedef seçebilirsiniz
+          </div>
         </div>
 
-        {/* Map */}
-        <div style={{ flex: 1, position: 'relative' }}>
-          <div ref={mapHostRef} style={{ width: '100%', height: '100%', background: 'var(--bg-deep)' }} />
-
-          {/* Fütüristik Harita Katmanı ve Trafik Paneli */}
-          <div ref={layerControlsRef} className="map-layer-controls">
-            <button
-              type="button"
-              className={`map-layer-btn ${mapType === 'hybrid' ? 'active' : ''}`}
-              onClick={() => setMapType(mapType === 'roadmap' ? 'hybrid' : 'roadmap')}
-              title={lang === 'tr' ? "Uydu Görünümünü Aç/Kapat" : "Toggle Satellite View"}
-            >
-              {mapType === 'hybrid' ? t('map_layer_road', lang) : t('map_layer_satellite', lang)}
-            </button>
-            <button
-              type="button"
-              className={`map-layer-btn ${showTraffic ? 'active' : ''}`}
-              onClick={() => setShowTraffic(!showTraffic)}
-              title={lang === 'tr' ? "Canlı Trafik Durumunu Göster/Gizle" : "Toggle Live Traffic"}
-            >
-              {showTraffic ? t('map_traffic_off', lang) : t('map_traffic_on', lang)}
-            </button>
+        {/* Route info banner */}
+        {routeInfo && (
+          <div style={{ padding: '12px 20px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', gap: '16px', alignItems: 'center', background: 'rgba(56,189,248,0.05)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '1.1rem' }}>🚗</span>
+              <div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>{routeInfo.distanceKm} km</div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Toplam mesafe</div>
+              </div>
+            </div>
+            <div style={{ width: '1px', height: '30px', background: 'var(--border-subtle)' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <span style={{ fontSize: '1.1rem' }}>⏱️</span>
+              <div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>{routeInfo.durationMin > 60 ? `${Math.floor(routeInfo.durationMin / 60)} sa ${routeInfo.durationMin % 60} dk` : `${routeInfo.durationMin} dk`}</div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Tahmini süre</div>
+              </div>
+            </div>
           </div>
+        )}
+
+        {/* Station list */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px 20px' }}>
+          {loading && (
+            <div style={{ textAlign: 'center', padding: '30px 0', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: '1.5rem', marginBottom: '8px', animation: 'spin 1s linear infinite' }}>⚡</div>
+              Rota hesaplanıyor...
+            </div>
+          )}
+          {!loading && routeStations.length > 0 && (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h3 style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>⚡ Güzergah Üzerindeki İstasyonlar</h3>
+                <span style={{ background: 'rgba(56,189,248,0.15)', color: 'var(--accent-cyan)', padding: '2px 10px', borderRadius: '99px', fontSize: '0.75rem', fontWeight: 600 }}>{routeStations.length} istasyon</span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {routeStations.map((s, idx) => {
+                  const distKm = originCoords ? kmBetween(originCoords[0], originCoords[1], s.lat, s.lng).toFixed(1) : null;
+                  return (
+                    <div key={s.id}
+                      style={{ background: 'var(--bg-deep)', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border-subtle)', transition: 'all 0.2s', cursor: 'pointer' }}
+                      onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent-cyan)'; e.currentTarget.style.transform = 'translateX(2px)'; }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border-subtle)'; e.currentTarget.style.transform = 'none'; }}
+                      onClick={() => { if (mapRef.current) { mapRef.current.setCenter({ lat: s.lat, lng: s.lng }); mapRef.current.setZoom(15); } }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '5px' }}>
+                        <span style={{ background: s.isGreen ? '#22c55e' : s.maxPower >= 100 ? '#f59e0b' : '#818cf8', color: '#fff', width: '22px', height: '22px', borderRadius: '50%', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', fontWeight: 700, flexShrink: 0 }}>{idx + 1}</span>
+                        <span style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--text-primary)', flex: 1, lineHeight: 1.2 }}>{s.name}</span>
+                        {distKm && (
+                          <span style={{ background: 'rgba(56,189,248,0.12)', color: 'var(--accent-cyan)', padding: '2px 8px', borderRadius: '99px', fontSize: '0.72rem', fontWeight: 600, whiteSpace: 'nowrap', border: '1px solid rgba(56,189,248,0.25)' }}>
+                            {distKm} km
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', paddingLeft: '32px', marginBottom: '4px' }}>{s.brand} • {s.city}</div>
+                      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', paddingLeft: '32px' }}>
+                        <span style={{ fontSize: '0.65rem', padding: '1px 6px', borderRadius: '4px', background: 'rgba(56,189,248,0.1)', color: '#38bdf8' }}>{s.maxPower} kW</span>
+                        <span style={{ fontSize: '0.65rem', padding: '1px 6px', borderRadius: '4px', background: 'rgba(148,163,184,0.1)', color: 'var(--text-muted)' }}>{s.socketCount} soket</span>
+                        {s.isGreen && <span style={{ fontSize: '0.65rem', padding: '1px 6px', borderRadius: '4px', background: 'rgba(34,197,94,0.1)', color: '#22c55e' }}>🌿 Yeşil</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+          {!loading && routeStations.length === 0 && !routeInfo && (
+            <div style={{ textAlign: 'center', marginTop: '40px', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: '2.5rem', marginBottom: '12px', opacity: 0.3 }}>🔌</div>
+              <div style={{ fontSize: '0.85rem', lineHeight: 1.6 }}>
+                Hedef noktanızı yukarıdaki arama kutusuna yazın<br/>veya haritaya tıklayarak seçin.
+              </div>
+              <div style={{ fontSize: '0.75rem', marginTop: '8px', opacity: 0.6 }}>
+                Güzergah üzerindeki tüm şarj istasyonları<br/>otomatik olarak listelenecektir.
+              </div>
+            </div>
+          )}
+          {!loading && routeStations.length === 0 && routeInfo && (
+            <div style={{ textAlign: 'center', marginTop: '30px', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+              Bu güzergah üzerinde {maxDistanceKm} km içinde şarj istasyonu bulunamadı.
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Map */}
+      <div style={{ flex: 1, position: 'relative' }}>
+        <div ref={mapHostRef} style={{ width: '100%', height: '100%', background: 'var(--bg-deep)' }} />
+        <div ref={layerControlsRef} className="map-layer-controls">
+          <button type="button" className={`map-layer-btn ${mapType === 'hybrid' ? 'active' : ''}`}
+            onClick={() => setMapType(mapType === 'roadmap' ? 'hybrid' : 'roadmap')}
+            title={lang === 'tr' ? "Uydu Görünümünü Aç/Kapat" : "Toggle Satellite View"}>
+            {mapType === 'hybrid' ? t('map_layer_road', lang) : t('map_layer_satellite', lang)}
+          </button>
+          <button type="button" className={`map-layer-btn ${showTraffic ? 'active' : ''}`}
+            onClick={() => setShowTraffic(!showTraffic)}
+            title={lang === 'tr' ? "Canlı Trafik Durumunu Göster/Gizle" : "Toggle Live Traffic"}>
+            {showTraffic ? t('map_traffic_off', lang) : t('map_traffic_on', lang)}
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-export default App;
+
+
+
 
 /* ━━━━━━━━ STATIONS PAGE ━━━━━━━━ */
 function StationsPage() {
@@ -2431,6 +2582,7 @@ function StationsPage() {
 
   const [greenFilter, setGreenFilter] = useState<'all' | 'green' | 'normal'>('all');
   const [serviceFilter, setServiceFilter] = useState<'all' | 'Halka Açık' | 'Özel'>('all');
+  const [acDcFilter, setAcDcFilter] = useState<'all' | 'AC' | 'DC'>('all');
   const [userLoc, setUserLoc] = useState<{ lat: number; lng: number } | null>(null);
 
   useEffect(() => {
@@ -2457,6 +2609,9 @@ function StationsPage() {
     if (serviceFilter !== 'all') {
       result = result.filter(s => s.serviceType === normalizeServiceLabel(serviceFilter));
     }
+    if (acDcFilter !== 'all') {
+      result = result.filter(s => acDcFilter === 'AC' ? s.hasAC : s.hasDC);
+    }
 
     const q = search.trim().toLowerCase();
     if (q) {
@@ -2477,7 +2632,7 @@ function StationsPage() {
     }
 
     return result;
-  }, [stations, search, greenFilter, serviceFilter, userLoc]);
+  }, [stations, search, greenFilter, serviceFilter, acDcFilter, userLoc]);
 
   const itemsPerPage = 100;
   const pageCount = Math.ceil(filtered.length / itemsPerPage);
@@ -2685,6 +2840,14 @@ function StationsPage() {
               </div>
             </div>
             <div>
+              <div className="custom-filter-label">Soket Tipi</div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button type="button" className={`custom-chip ${acDcFilter === 'all' ? 'active-cyan' : ''}`} onClick={() => { setAcDcFilter('all'); setPage(0); }}>Tümü</button>
+                <button type="button" className={`custom-chip ${acDcFilter === 'AC' ? 'active-cyan' : ''}`} onClick={() => { setAcDcFilter('AC'); setPage(0); }}>AC</button>
+                <button type="button" className={`custom-chip ${acDcFilter === 'DC' ? 'active-cyan' : ''}`} onClick={() => { setAcDcFilter('DC'); setPage(0); }}>DC</button>
+              </div>
+            </div>
+            <div>
               <div className="custom-filter-label">{t('stations_sort', lang)}</div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button
@@ -2777,3 +2940,5 @@ function StationsPage() {
     </div>
   );
 }
+
+export default App;

@@ -14,6 +14,7 @@
     "geocode:batch100": "node scripts/geocode-stations.mjs --input public/data/stations.geocoded.json --output public/data/stations.geocoded.json --cache public/data/geocode-cache.json --limit 100 --photon-only --sleepMs 450"
   },
   "dependencies": {
+    "@googlemaps/markerclusterer": "^2.6.2",
     "@types/leaflet-routing-machine": "^3.2.9",
     "leaflet": "^1.9.4",
     "leaflet-routing-machine": "^3.2.12",
