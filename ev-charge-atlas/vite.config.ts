@@ -9,8 +9,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png', 'hero-bg.png'],
       manifest: {
-        name: 'LumaCharge — EV Şarj İstasyonu Haritası',
-        short_name: 'LumaCharge',
+        name: 'ECNA — EV Şarj İstasyonu Haritası',
+        short_name: 'ECNA',
         description: 'Türkiye\'nin en kapsamlı elektrikli araç şarj istasyonu haritası. 22.000+ istasyonu keşfet.',
         theme_color: '#06080f',
         background_color: '#06080f',

@@ -404,7 +404,6 @@ function Navbar({ theme, toggleTheme }: { theme: 'light' | 'dark'; toggleTheme: 
             <NavLink to="/map">{t('nav_map', lang)}</NavLink>
             <NavLink to="/route-planner">{t('nav_route', lang)}</NavLink>
             <NavLink to="/stations">{t('nav_stations', lang)}</NavLink>
-            <NavLink to="/contact">{t('nav_contact', lang)}</NavLink>
           </div>
           <div className="navbar-right">
             {canInstall && (
@@ -432,7 +431,7 @@ function Navbar({ theme, toggleTheme }: { theme: 'light' | 'dark'; toggleTheme: 
                 <line x1="2" y1="12" x2="22" y2="12"/>
                 <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
               </svg>
-              <span className="lang-toggle-text">{lang === 'tr' ? 'EN' : 'TR'}</span>
+              <span className="lang-toggle-text">{lang === 'tr' ? 'TR' : 'EN'}</span>
             </button>
             <button
               className="hamburger"
@@ -457,7 +456,6 @@ function Navbar({ theme, toggleTheme }: { theme: 'light' | 'dark'; toggleTheme: 
           <NavLink to="/map" onClick={() => setMobileOpen(false)}>🗺️ {t('nav_map', lang)}</NavLink>
           <NavLink to="/route-planner" onClick={() => setMobileOpen(false)}>🚗 {t('nav_route', lang)}</NavLink>
           <NavLink to="/stations" onClick={() => setMobileOpen(false)}>📍 {t('nav_stations', lang)}</NavLink>
-          <NavLink to="/contact" onClick={() => setMobileOpen(false)}>📬 {t('nav_contact', lang)}</NavLink>
           <div className="mobile-drawer-divider" />
 
           <button className="mobile-theme-toggle" onClick={toggleTheme} type="button">
@@ -470,7 +468,7 @@ function Navbar({ theme, toggleTheme }: { theme: 'light' | 'dark'; toggleTheme: 
               <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/>
               <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
             </svg>
-            <span>{lang === 'tr' ? 'English' : 'Türkçe'}</span>
+            <span>{lang === 'tr' ? 'Türkçe' : 'English'}</span>
           </button>
 
           <NavLink to="/map" className="mobile-drawer-cta" onClick={() => setMobileOpen(false)}>
@@ -503,7 +501,6 @@ function Footer() {
           <NavLink to="/map">{t('nav_map', lang)}</NavLink>
           <NavLink to="/route-planner">{t('nav_route', lang)}</NavLink>
           <NavLink to="/stations">{t('nav_stations', lang)}</NavLink>
-          <NavLink to="/contact">{t('nav_contact', lang)}</NavLink>
         </div>
         <span className="footer-copy">{t('footer_copy', lang)}</span>
       </div>
@@ -547,7 +544,6 @@ function App() {
           <Route path="/map" element={<MapPage theme={theme} />} />
           <Route path="/route-planner" element={<RoutePlannerPage theme={theme} />} />
           <Route path="/stations" element={<StationsPage />} />
-          <Route path="/contact" element={<ContactPage />} />
         </Routes>
       </div>
     </LangContext.Provider>
@@ -1096,9 +1092,16 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
   const lastSpokenIndexRef = useRef<number>(-1);
   const [navActive, setNavActive] = useState(false);
   const [navSpeed, setNavSpeed] = useState(0);
+  const [targetSimSpeed, setTargetSimSpeed] = useState(60);
+  const targetSimSpeedRef = useRef(60);
+  useEffect(() => { targetSimSpeedRef.current = targetSimSpeed; }, [targetSimSpeed]);
   const [_navHeading, setNavHeading] = useState(0); // used internally by updateCarIcon
   const trVoiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const prevSimCoordRef = useRef<[number, number] | null>(null);
+  // Konuşma kuyruğu kilit ref'i — setTimeout gecikmesinden bağımsız güvenilir guard
+  const isSpeakingRef = useRef(false);
+  // Son konuşmanın başladığı zaman — cooldown için
+  const lastSpeakTimeRef = useRef(0);
 
   // Türkçe sesi önceden bul ve kaydet (en kaliteli olanı seç)
   useEffect(() => {
@@ -1118,22 +1121,67 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
     return () => window.speechSynthesis?.removeEventListener('voiceschanged', findVoice);
   }, []);
 
+  // Sesli yönlendirme — cooldown ile üst üste binmeyi kesin olarak önler.
+  // Bir ses bitmeden yenisi başlamaz. Son sesten 3 saniye geçmeden hiçbir ses çalmaz.
+  const SPEECH_COOLDOWN_MS = 3000;
+
   const speakTurkish = useCallback((text: string) => {
     if (!('speechSynthesis' in window)) return;
 
-    // Anlık yol yönlendirme komutlarının birbiri üzerine binmemesi ve en güncel komutun
-    // anında seslendirilmesi için önceki konuşmaları hemen iptal et.
+    const now = Date.now();
+
+    // Hâlâ konuşuluyor veya cooldown dolmadı → bu anonsu atla
+    if (isSpeakingRef.current) return;
+    if (now - lastSpeakTimeRef.current < SPEECH_COOLDOWN_MS) return;
+
+    // Önceki artıkları temizle
     window.speechSynthesis.cancel();
 
+    // Chrome/Webkit GC bug'ı: utterance objesini global tutmak şart,
+    // aksi hâlde uzun cümlelerin ortasında ses kesilir.
     setTimeout(() => {
       const utter = new SpeechSynthesisUtterance(text);
+      (window as any).__activeUtterance = utter;
+
       utter.lang = 'tr-TR';
-      utter.rate = 0.9; // Daha akıcı ve doğal bir sürüş asistanı sesi
+      utter.rate = 1.0;
       utter.pitch = 1.0;
       utter.volume = 1.0;
       if (trVoiceRef.current) utter.voice = trVoiceRef.current;
+
+      isSpeakingRef.current = true;
+      lastSpeakTimeRef.current = Date.now();
+
+      const unlock = () => {
+        (window as any).__activeUtterance = null;
+        isSpeakingRef.current = false;
+      };
+      utter.onend = unlock;
+      utter.onerror = unlock;
+
       window.speechSynthesis.speak(utter);
-    }, 60);
+    }, 150);
+  }, []);
+
+  // Çeşitlendirilmiş ön uyarı mesajı şablonları
+  const buildWarningText = useCallback((distMetres: number, actionText: string): string => {
+    const d = distMetres;
+    // Mesafeyi doğal Türkçe ifadeye çevir
+    const distStr = d >= 1000
+      ? `${(d / 1000).toFixed(1).replace('.', ',')} kilometre`
+      : `${d} metre`;
+
+    const templates = [
+      `${distStr} sonra ${actionText}.`,
+      `${distStr} ileride ${actionText}.`,
+      `Yaklaşık ${distStr} sonra ${actionText}.`,
+    ];
+    return templates[Math.floor(Math.random() * templates.length)];
+  }, []);
+
+  // Tam manevra noktasında Google Maps tarzı net anons
+  const buildTurnText = useCallback((actionText: string): string => {
+    return `Şimdi ${actionText}.`;
   }, []);
 
   const translateInstruction = useCallback((text: string): string => {
@@ -1206,63 +1254,98 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
     return (toDeg(Math.atan2(y, x)) + 360) % 360;
   }, []);
 
-
+  const carIconCacheRef = useRef<Record<string, string>>({});
 
   const updateCarIcon = useCallback((heading: number) => {
     if (!carMarkerRef.current) return;
     const isDark = theme === 'dark';
-    const carColor = isDark ? '#2dd4bf' : '#3b82f6';
+    
+    // Yönü 1 derece hassasiyetle yuvarlayıp önbellekleme kullanacağız
+    // Böylece her frame'de yeni string oluşturulmayacak ve tarayıcı görseli anında çizecek.
+    const roundedHeading = Math.round(heading);
+    const cacheKey = `${roundedHeading}_${isDark}`;
 
-    const svgIcon = `
-<svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    if (!carIconCacheRef.current[cacheKey]) {
+      const bodyBaseColor = isDark ? '#14b8a6' : '#2563eb';
+      const bodyGlossColor = isDark ? '#2dd4bf' : '#3b82f6';
+      const bodyDarkColor = isDark ? '#0f766e' : '#1d4ed8';
+
+      // Titremeleri önlemek için <filter> (blur vb.) SVG efektleri kaldırıldı.
+      // Bunlar donanım ivmesini zorlayıp 1 frame gecikmeye/kaybolmaya yol açar.
+      const svgIcon = `
+<svg width="80" height="80" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <radialGradient id="shadowGrad" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#000" stop-opacity="0.6"/>
-      <stop offset="100%" stop-color="#000" stop-opacity="0"/>
-    </radialGradient>
+    <linearGradient id="bodyGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="${bodyDarkColor}" />
+      <stop offset="30%" stop-color="${bodyBaseColor}" />
+      <stop offset="50%" stop-color="${bodyGlossColor}" />
+      <stop offset="70%" stop-color="${bodyBaseColor}" />
+      <stop offset="100%" stop-color="${bodyDarkColor}" />
+    </linearGradient>
+
+    <linearGradient id="glassReflect" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#020617"/>
+      <stop offset="40%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+
     <linearGradient id="beamGrad" x1="50%" y1="100%" x2="50%" y2="0%">
       <stop offset="0%" stop-color="#fef08a" stop-opacity="0.8"/>
-      <stop offset="40%" stop-color="#fef08a" stop-opacity="0.3"/>
+      <stop offset="50%" stop-color="#fef08a" stop-opacity="0.2"/>
       <stop offset="100%" stop-color="#fef08a" stop-opacity="0"/>
     </linearGradient>
   </defs>
 
-  <g transform="rotate(${heading} 50 50)">
-    <!-- 1. Car Shadow -->
-    <ellipse cx="50" cy="58" rx="22" ry="32" fill="url(#shadowGrad)"/>
+  <g transform="rotate(${roundedHeading} 50 50)">
+    <!-- 1. Performanslı Zemin Gölgesi (Filter kullanılmadan saydam elips) -->
+    <rect x="33" y="18" width="34" height="66" rx="12" fill="#000" opacity="0.6"/>
+    <rect x="31" y="20" width="38" height="62" rx="12" fill="#000" opacity="0.3"/>
 
-    <!-- 2. Headlight Beams (Farları Açık - Dark Mode) -->
+    <!-- 2. Far Aydınlatması -->
     ${isDark ? `
-    <polygon points="41,23 15,-15 45,-15" fill="url(#beamGrad)"/>
-    <polygon points="59,23 55,-15 85,-15" fill="url(#beamGrad)"/>
+    <polygon points="38,20 10,-25 50,-25" fill="url(#beamGrad)"/>
+    <polygon points="62,20 50,-25 90,-25" fill="url(#beamGrad)"/>
     ` : ''}
 
-    <!-- 3. Wheels -->
-    <rect x="27" y="28" width="6" height="14" rx="2" fill="#0f172a" stroke="${carColor}" stroke-width="1"/>
-    <rect x="67" y="28" width="6" height="14" rx="2" fill="#0f172a" stroke="${carColor}" stroke-width="1"/>
-    <rect x="27" y="62" width="6" height="14" rx="2" fill="#0f172a" stroke="${carColor}" stroke-width="1"/>
-    <rect x="67" y="62" width="6" height="14" rx="2" fill="#0f172a" stroke="${carColor}" stroke-width="1"/>
+    <!-- 3. Tekerlekler -->
+    <rect x="29" y="24" width="8" height="15" rx="3" fill="#0f172a"/>
+    <rect x="63" y="24" width="8" height="15" rx="3" fill="#0f172a"/>
+    <rect x="29" y="61" width="8" height="15" rx="3" fill="#0f172a"/>
+    <rect x="63" y="61" width="8" height="15" rx="3" fill="#0f172a"/>
 
-    <!-- 4. Futuristic EV Body -->
-    <path d="M32,75 C32,82 68,82 68,75 L68,32 C68,22 62,18 50,18 C38,18 32,22 32,32 Z" fill="#1e293b" stroke="${carColor}" stroke-width="2.5"/>
-    <path d="M34,70 C34,76 66,76 66,70 L64,34 C64,26 58,22 50,22 C42,22 36,26 36,34 Z" fill="${carColor}"/>
-    
-    <!-- 5. 3D Glass Cabin Roof -->
-    <path d="M38,58 C38,62 62,62 62,58 L60,40 C60,32 56,28 50,28 C44,28 40,32 40,40 Z" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/>
-    <path d="M42,50 C42,52 58,52 58,50 L57,41 C57,36 54,34 50,34 C46,34 43,36 43,41 Z" fill="#1e293b"/>
-    <path d="M43,40 C43,38 57,38 57,40 L56,43 C56,43 44,43 44,43 Z" fill="#ffffff" fill-opacity="0.35"/>
+    <!-- 4. Ana Kasa -->
+    <path d="M40,16 Q50,14 60,16 C66,16 69,22 69,30 L69,68 C69,78 66,82 60,82 Q50,84 40,82 C34,82 31,78 31,68 L31,30 C31,22 34,16 40,16 Z" fill="url(#bodyGrad)"/>
 
-    <!-- 6. Headlights dots -->
-    <circle cx="41" cy="23" r="3.5" fill="#fef08a"/>
-    <circle cx="59" cy="23" r="3.5" fill="#fef08a"/>
+    <!-- 5. Yan Aynalar -->
+    <path d="M32,36 C27,33 28,40 33,39 Z" fill="${bodyDarkColor}"/>
+    <path d="M68,36 C73,33 72,40 67,39 Z" fill="${bodyDarkColor}"/>
+
+    <!-- 6. Cam Tavan -->
+    <path d="M37,42 C37,30 42,28 50,28 C58,28 63,30 63,42 L61,64 C61,72 56,73 50,73 C44,73 39,72 39,64 Z" fill="url(#glassReflect)"/>
+    <path d="M42,42 C42,35 45,34 50,34 C55,34 58,35 58,42 L57,60 C57,65 54,66 50,66 C46,66 43,65 43,60 Z" fill="#0f172a"/>
+    <path d="M42,32 Q50,29 58,32 L56,36 Q50,33 44,36 Z" fill="#ffffff" opacity="0.4"/>
+    <path d="M44,69 Q50,71 56,69 L55,66 Q50,68 45,66 Z" fill="#ffffff" opacity="0.15"/>
+
+    <!-- 7. Bagaj Kesim -->
+    <path d="M36,75 Q50,72 64,75" fill="none" stroke="#000" stroke-opacity="0.3" stroke-width="1.2"/>
+
+    <!-- 8. Matrix LED Ön Farlar -->
+    <path d="M33,21 Q37,18 41,20" fill="none" stroke="#e0f2fe" stroke-width="2" stroke-linecap="round" />
+    <path d="M67,21 Q63,18 59,20" fill="none" stroke="#e0f2fe" stroke-width="2" stroke-linecap="round" />
+
+    <!-- 9. Neon Şerit Arka Stop Lambaları (Performanslı Sahte Gölge) -->
+    <path d="M33,79 Q50,82 67,79" fill="none" stroke="#ef4444" stroke-width="4" stroke-linecap="round" stroke-opacity="0.4"/>
+    <path d="M33,78 Q50,81 67,78" fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" />
   </g>
 </svg>
 `;
+      carIconCacheRef.current[cacheKey] = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svgIcon.trim());
+    }
 
     carMarkerRef.current.setIcon({
-      url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svgIcon.trim()),
-      scaledSize: new google.maps.Size(60, 60),
-      anchor: new google.maps.Point(30, 30),
+      url: carIconCacheRef.current[cacheKey],
+      scaledSize: new google.maps.Size(80, 80),
+      anchor: new google.maps.Point(40, 40),
     });
   }, [theme]);
 
@@ -1326,15 +1409,15 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
         updateCarIcon(bearing);
 
         const distKm = kmBetween(pLat, pLng, lat, lng);
-        // Simülasyon hızını test için biraz daha makul bir seviyeye (160 km/h) çıkarıyoruz
-        const speedKmh = 160;
+        // Gerçekçi şehir içi hızı: kullanıcı tarafından belirlenen hız
+        const speedKmh = targetSimSpeedRef.current;
         const timeHours = distKm / speedKmh;
         timeMs = timeHours * 3600 * 1000;
         
-        // Smooth animasyon için limitleri düşür (min 16ms = ~60 FPS)
-        timeMs = Math.max(16, Math.min(timeMs, 1000));
+        // Smooth animasyon için limitleri ayarla (min 30ms, max 500ms)
+        timeMs = Math.max(30, Math.min(timeMs, 500));
         
-        setNavSpeed(distKm > 0.0001 ? speedKmh : 0);
+        setNavSpeed(distKm > 0.0001 ? Math.round(speedKmh) : 0);
       }
       prevSimCoordRef.current = [lat, lng];
 
@@ -1364,18 +1447,18 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
 
           const distToTurn = kmBetween(lat, lng, turnCoords[0], turnCoords[1]) * 1000;
           
-          // Google Maps tarzı önceden uyarı (yaklaşık 350m kala)
+          // Önceden uyarı (yaklaşık 350m kala) — çeşitlendirilmiş şablonla
           if (distToTurn <= 350 && distToTurn >= 50 && idx < coordIdx) {
             if (!inst.warned && !inst.text.includes('Rotada ilerleyin') && !inst.text.includes('Hedefinize ulaştınız')) {
               inst.warned = true;
               const roundedDist = Math.round(distToTurn / 50) * 50;
-              const trText = translateInstruction(`${roundedDist} metre sonra ${inst.text.toLocaleLowerCase('tr-TR')}`);
+              const trText = buildWarningText(roundedDist, inst.text.toLocaleLowerCase('tr-TR'));
               speakTurkish(trText);
               break;
             }
           } else if (idx >= coordIdx - 1) {
             // Tam manevra noktasına gelindiğinde asıl anons
-            const trText = translateInstruction(inst.text);
+            const trText = buildTurnText(inst.text);
             speakTurkish(trText);
             lastSpokenIndexRef.current = i;
             break;
@@ -1383,12 +1466,12 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
         }
       }
 
-      idx += step;
+      idx += 1;
       simulationTimerRef.current = setTimeout(runStep, timeMs);
     };
 
     runStep();
-  }, [speakTurkish, translateInstruction, calcBearing, updateCarIcon]);
+  }, [speakTurkish, calcBearing, updateCarIcon, buildWarningText, buildTurnText]);
 
   useEffect(() => {
     (window as any).startNavigation = (stationId: string) => {
@@ -1415,49 +1498,76 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
 
         // Navigation car marker
         const isDark = theme === 'dark';
-        const carColor = isDark ? '#2dd4bf' : '#3b82f6';
+        
+        // Yeni tasarlanan 3D başlangıç ikonu (Animasyon başlamadan önceki statik hali)
+        const bodyBaseColor = isDark ? '#14b8a6' : '#2563eb';
+        const bodyGlossColor = isDark ? '#2dd4bf' : '#3b82f6';
+        const bodyDarkColor = isDark ? '#0f766e' : '#1d4ed8';
+
         const initialCarSvg = `
-<svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+<svg width="80" height="80" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <radialGradient id="shadowGrad" cx="50%" cy="50%" r="50%">
-      <stop offset="0%" stop-color="#000" stop-opacity="0.6"/>
-      <stop offset="100%" stop-color="#000" stop-opacity="0"/>
-    </radialGradient>
-    <linearGradient id="beamGrad" x1="50%" y1="100%" x2="50%" y2="0%">
+    <linearGradient id="bodyGradInit" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="${bodyDarkColor}" />
+      <stop offset="30%" stop-color="${bodyBaseColor}" />
+      <stop offset="50%" stop-color="${bodyGlossColor}" />
+      <stop offset="70%" stop-color="${bodyBaseColor}" />
+      <stop offset="100%" stop-color="${bodyDarkColor}" />
+    </linearGradient>
+
+    <linearGradient id="glassReflectInit" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#020617"/>
+      <stop offset="40%" stop-color="#1e293b"/>
+      <stop offset="100%" stop-color="#020617"/>
+    </linearGradient>
+
+    <linearGradient id="beamGradInit" x1="50%" y1="100%" x2="50%" y2="0%">
       <stop offset="0%" stop-color="#fef08a" stop-opacity="0.8"/>
-      <stop offset="40%" stop-color="#fef08a" stop-opacity="0.3"/>
+      <stop offset="50%" stop-color="#fef08a" stop-opacity="0.2"/>
       <stop offset="100%" stop-color="#fef08a" stop-opacity="0"/>
     </linearGradient>
   </defs>
 
   <g transform="rotate(0 50 50)">
-    <!-- 1. Car Shadow -->
-    <ellipse cx="50" cy="58" rx="22" ry="32" fill="url(#shadowGrad)"/>
+    <!-- Performanslı Zemin Gölgesi -->
+    <rect x="33" y="18" width="34" height="66" rx="12" fill="#000" opacity="0.6"/>
+    <rect x="31" y="20" width="38" height="62" rx="12" fill="#000" opacity="0.3"/>
 
-    <!-- 2. Headlight Beams (Farları Açık - Dark Mode) -->
+    <!-- Far Aydınlatması -->
     ${isDark ? `
-    <polygon points="41,23 15,-15 45,-15" fill="url(#beamGrad)"/>
-    <polygon points="59,23 55,-15 85,-15" fill="url(#beamGrad)"/>
+    <polygon points="38,20 10,-25 50,-25" fill="url(#beamGradInit)"/>
+    <polygon points="62,20 50,-25 90,-25" fill="url(#beamGradInit)"/>
     ` : ''}
 
-    <!-- 3. Wheels -->
-    <rect x="27" y="28" width="6" height="14" rx="2" fill="#0f172a" stroke="${carColor}" stroke-width="1"/>
-    <rect x="67" y="28" width="6" height="14" rx="2" fill="#0f172a" stroke="${carColor}" stroke-width="1"/>
-    <rect x="27" y="62" width="6" height="14" rx="2" fill="#0f172a" stroke="${carColor}" stroke-width="1"/>
-    <rect x="67" y="62" width="6" height="14" rx="2" fill="#0f172a" stroke="${carColor}" stroke-width="1"/>
+    <!-- Tekerlekler -->
+    <rect x="29" y="24" width="8" height="15" rx="3" fill="#0f172a"/>
+    <rect x="63" y="24" width="8" height="15" rx="3" fill="#0f172a"/>
+    <rect x="29" y="61" width="8" height="15" rx="3" fill="#0f172a"/>
+    <rect x="63" y="61" width="8" height="15" rx="3" fill="#0f172a"/>
 
-    <!-- 4. Futuristic EV Body -->
-    <path d="M32,75 C32,82 68,82 68,75 L68,32 C68,22 62,18 50,18 C38,18 32,22 32,32 Z" fill="#1e293b" stroke="${carColor}" stroke-width="2.5"/>
-    <path d="M34,70 C34,76 66,76 66,70 L64,34 C64,26 58,22 50,22 C42,22 36,26 36,34 Z" fill="${carColor}"/>
-    
-    <!-- 5. 3D Glass Cabin Roof -->
-    <path d="M38,58 C38,62 62,62 62,58 L60,40 C60,32 56,28 50,28 C44,28 40,32 40,40 Z" fill="#0f172a" stroke="#38bdf8" stroke-width="1.5"/>
-    <path d="M42,50 C42,52 58,52 58,50 L57,41 C57,36 54,34 50,34 C46,34 43,36 43,41 Z" fill="#1e293b"/>
-    <path d="M43,40 C43,38 57,38 57,40 L56,43 C56,43 44,43 44,43 Z" fill="#ffffff" fill-opacity="0.35"/>
+    <!-- Ana Kasa -->
+    <path d="M40,16 Q50,14 60,16 C66,16 69,22 69,30 L69,68 C69,78 66,82 60,82 Q50,84 40,82 C34,82 31,78 31,68 L31,30 C31,22 34,16 40,16 Z" fill="url(#bodyGradInit)"/>
 
-    <!-- 6. Headlights dots -->
-    <circle cx="41" cy="23" r="3.5" fill="#fef08a"/>
-    <circle cx="59" cy="23" r="3.5" fill="#fef08a"/>
+    <!-- Yan Aynalar -->
+    <path d="M32,36 C27,33 28,40 33,39 Z" fill="${bodyDarkColor}"/>
+    <path d="M68,36 C73,33 72,40 67,39 Z" fill="${bodyDarkColor}"/>
+
+    <!-- Cam Tavan -->
+    <path d="M37,42 C37,30 42,28 50,28 C58,28 63,30 63,42 L61,64 C61,72 56,73 50,73 C44,73 39,72 39,64 Z" fill="url(#glassReflectInit)"/>
+    <path d="M42,42 C42,35 45,34 50,34 C55,34 58,35 58,42 L57,60 C57,65 54,66 50,66 C46,66 43,65 43,60 Z" fill="#0f172a"/>
+    <path d="M42,32 Q50,29 58,32 L56,36 Q50,33 44,36 Z" fill="#ffffff" opacity="0.4"/>
+    <path d="M44,69 Q50,71 56,69 L55,66 Q50,68 45,66 Z" fill="#ffffff" opacity="0.15"/>
+
+    <!-- Bagaj Kesim -->
+    <path d="M36,75 Q50,72 64,75" fill="none" stroke="#000" stroke-opacity="0.3" stroke-width="1.2"/>
+
+    <!-- Matrix LED Ön Farlar -->
+    <path d="M33,21 Q37,18 41,20" fill="none" stroke="#e0f2fe" stroke-width="2" stroke-linecap="round" />
+    <path d="M67,21 Q63,18 59,20" fill="none" stroke="#e0f2fe" stroke-width="2" stroke-linecap="round" />
+
+    <!-- Neon Şerit Arka Stop Lambaları -->
+    <path d="M33,79 Q50,82 67,79" fill="none" stroke="#ef4444" stroke-width="4" stroke-linecap="round" stroke-opacity="0.4"/>
+    <path d="M33,78 Q50,81 67,78" fill="none" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" />
   </g>
 </svg>
 `;
@@ -1467,8 +1577,9 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
           map: map,
           icon: {
             url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(initialCarSvg.trim()),
-            scaledSize: new google.maps.Size(60, 60),
-            anchor: new google.maps.Point(30, 30),
+            size: new google.maps.Size(80, 80),
+            scaledSize: new google.maps.Size(80, 80),
+            anchor: new google.maps.Point(40, 40),
           },
           zIndex: 99999,
         });
@@ -1525,29 +1636,60 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
                   let text = "";
                   const type = step.maneuver.type;
                   const modifier = step.maneuver.modifier;
+                  const streetName = step.name && step.name.trim() && step.name !== '' ? step.name : null;
+
                   if (type === 'turn') {
-                    if (modifier === 'left') text = "Sola dönün";
-                    else if (modifier === 'right') text = "Sağa dönün";
-                    else if (modifier === 'sharp left') text = "Keskin sola dönün";
-                    else if (modifier === 'sharp right') text = "Keskin sağa dönün";
-                    else if (modifier === 'slight left') text = "Hafif sola dönün";
-                    else if (modifier === 'slight right') text = "Hafif sağa dönün";
-                    else if (modifier === 'uturn') text = "U dönüşü yapın";
-                    else text = "Dönüş yapın";
+                    let dir = '';
+                    if (modifier === 'left') dir = 'sola dönün';
+                    else if (modifier === 'right') dir = 'sağa dönün';
+                    else if (modifier === 'sharp left') dir = 'keskin sola dönün';
+                    else if (modifier === 'sharp right') dir = 'keskin sağa dönün';
+                    else if (modifier === 'slight left') dir = 'hafif sola dönün';
+                    else if (modifier === 'slight right') dir = 'hafif sağa dönün';
+                    else if (modifier === 'uturn') dir = 'U dönüşü yapın';
+                    else dir = 'dönüş yapın';
+                    text = streetName ? `${dir}, ${streetName} yoluna girin` : dir;
                   } else if (type === 'roundabout' || type === 'rotary') {
-                    if (step.maneuver.exit) text = `Kavşaktan ${step.maneuver.exit}. çıkıştan çıkın`;
-                    else text = "Kavşaktan çıkın";
-                  } else if (type === 'arrive') text = "Hedefinize ulaştınız";
-                  else if (type === 'depart') text = "Rotada ilerleyin";
-                  else if (type === 'continue') text = "Düz devam edin";
-                  else if (type === 'fork') text = modifier?.includes('left') ? "Soldan ayrılın" : "Sağdan ayrılın";
-                  else if (type === 'merge') text = "Ana yola bağlanın";
-                  else if (type === 'on ramp') text = "Otobana girin";
-                  else if (type === 'off ramp') text = "Otobandan çıkın";
-                  else if (type === 'new name') text = "";
-                  else if (type === 'use lane') text = "Şeridinizi koruyun";
-                  else if (type === 'end of road') text = modifier?.includes('left') ? "Yolun sonundan sola dönün" : "Yolun sonundan sağa dönün";
-                  else text = "";
+                    if (step.maneuver.exit) {
+                      text = `Dönel kavşakta ${step.maneuver.exit}. çıkışı kullanın`;
+                    } else {
+                      text = 'Dönel kavşaktan çıkın';
+                    }
+                  } else if (type === 'arrive') {
+                    text = 'Hedefinize ulaştınız';
+                  } else if (type === 'depart') {
+                    if (streetName) text = `${streetName} üzerinde ilerleyin`;
+                    else text = 'Rotada ilerleyin';
+                  } else if (type === 'continue') {
+                    if (modifier === 'straight' || !modifier) {
+                      text = streetName ? `${streetName} üzerinde düz devam edin` : 'Düz devam edin';
+                    } else if (modifier === 'slight left') {
+                      text = streetName ? `Hafif sola geçin, ${streetName} yoluna girin` : 'Hafif sola geçin';
+                    } else if (modifier === 'slight right') {
+                      text = streetName ? `Hafif sağa geçin, ${streetName} yoluna girin` : 'Hafif sağa geçin';
+                    } else {
+                      text = 'Devam edin';
+                    }
+                  } else if (type === 'fork') {
+                    if (modifier?.includes('left')) text = streetName ? `Soldan ayrılın, ${streetName} yoluna girin` : 'Soldan ayrılın';
+                    else text = streetName ? `Sağdan ayrılın, ${streetName} yoluna girin` : 'Sağdan ayrılın';
+                  } else if (type === 'merge') {
+                    text = streetName ? `${streetName} yoluna bağlanın` : 'Ana yola bağlanın';
+                  } else if (type === 'on ramp') {
+                    text = streetName ? `${streetName} üzerinden otobana girin` : 'Otobana girin';
+                  } else if (type === 'off ramp') {
+                    text = streetName ? `Çıkışı kullanın, ${streetName} yoluna geçin` : 'Çıkışı kullanın';
+                  } else if (type === 'new name') {
+                    if (streetName) text = `${streetName} olarak devam edin`;
+                    else text = '';
+                  } else if (type === 'use lane') {
+                    text = 'Şeridinizi koruyun';
+                  } else if (type === 'end of road') {
+                    if (modifier?.includes('left')) text = 'Yolun sonunda sola dönün';
+                    else text = 'Yolun sonunda sağa dönün';
+                  } else {
+                    text = '';
+                  }
 
                   instructions.push({
                     text: text,
@@ -1558,9 +1700,9 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
               routeInstructionsRef.current = instructions;
 
               setNavActive(true);
-              const totalDist = (route.distance / 1000).toFixed(1) + ' km';
-              const totalTime = Math.ceil(route.duration / 60) + ' dk';
-              speakTurkish(`Navigasyon başlatıldı. Toplam mesafe ${totalDist}, tahmini süre ${totalTime}.`);
+              const totalDist = (route.distance / 1000).toFixed(1).replace('.', ',') + ' kilometre';
+              const totalTime = Math.ceil(route.duration / 60) + ' dakika';
+              speakTurkish(`Hedefinize doğru yola çıkılıyor. Yollanılacak mesafe ${totalDist}, tahmini varış süresi ${totalTime}.`);
 
               if (navigator.geolocation) {
                 watchIdRef.current = navigator.geolocation.watchPosition(
@@ -1592,8 +1734,19 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
                       if (coordIdx !== undefined && coordIdx < coords.length) {
                         const [iLat, iLng] = coords[coordIdx];
                         const dist = kmBetween(newLat, newLng, iLat, iLng) * 1000;
-                        if (dist < 150) {
-                          const trText = translateInstruction(inst.text);
+                        
+                        // Önceden uyarı (~350m kala) — çeşitlendirilmiş şablonla
+                        if (dist <= 350 && dist >= 50) {
+                          if (!inst.warned && !inst.text.includes('Rotada ilerleyin') && !inst.text.includes('Hedefinize ulaştınız')) {
+                            inst.warned = true;
+                            const roundedDist = Math.round(dist / 50) * 50;
+                            const trText = buildWarningText(roundedDist, inst.text.toLocaleLowerCase('tr-TR'));
+                            speakTurkish(trText);
+                            break;
+                          }
+                        } else if (dist < 50) {
+                          // Tam manevra noktası
+                          const trText = buildTurnText(inst.text);
                           speakTurkish(trText);
                           lastSpokenIndexRef.current = i;
                           break;
@@ -1653,7 +1806,7 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
     };
 
     (window as any).stopNavigation = () => stopNavigation();
-  }, [stations, userLocation, stopNavigation, speakTurkish, translateInstruction]);
+  }, [stations, userLocation, stopNavigation, speakTurkish, buildWarningText, buildTurnText]);
 
   // Dynamic Map Theme Style Update
   useEffect(() => {
@@ -1697,6 +1850,8 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
       mapTypeControl: false,
       streetViewControl: false,
       fullscreenControl: false,
+      mapTypeId: 'roadmap', // Varsayılan tip
+      backgroundColor: theme === 'dark' ? '#0f172a' : '#f8fafc', // Yüklenirken (cortlamaları/beyaz palamaları) önleyen arka plan
       styles: theme === 'dark' ? GOOGLE_MAPS_DARK_STYLE : [],
     });
     infoWindowRef.current = new google.maps.InfoWindow();
@@ -1778,6 +1933,7 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
                 position,
                 icon: {
                   url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg.trim()),
+                  size: new google.maps.Size(size, size),
                   scaledSize: new google.maps.Size(size, size),
                   anchor: new google.maps.Point(size / 2, size / 2)
                 },
@@ -1817,6 +1973,7 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
           position: { lat: station.lat, lng: station.lng },
           icon: {
             url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svgIcon.trim()),
+            size: new google.maps.Size(26, 34),
             scaledSize: new google.maps.Size(26, 34),
             anchor: new google.maps.Point(13, 34),
           },
@@ -1911,8 +2068,16 @@ function MapPage({ theme }: { theme: 'light' | 'dark' }) {
             <span className="nav-speed-value">{navSpeed}</span>
             <span className="nav-speed-unit">km/h</span>
           </div>
+
+          <div className="nav-sim-controls" style={{display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(0,0,0,0.2)', padding: '4px 8px', borderRadius: '8px', color: '#fff'}}>
+            <span style={{fontSize: '12px', opacity: 0.9}}>Sim Hızı:</span>
+            <button onClick={() => setTargetSimSpeed(s => Math.max(10, s - 10))} className="nav-sim-btn" style={{padding: '2px 8px', minWidth: 'unset'}}>-</button>
+            <span style={{fontWeight: 'bold', width: '3ch', textAlign: 'center'}}>{targetSimSpeed}</span>
+            <button onClick={() => setTargetSimSpeed(s => Math.min(300, s + 10))} className="nav-sim-btn" style={{padding: '2px 8px', minWidth: 'unset'}}>+</button>
+          </div>
+
           <div className="nav-active-pulse" />
-          <span>{t('map_nav_active', lang)}</span>
+          <span style={{ color: '#fff' }}>{t('map_nav_active', lang)}</span>
           <button onClick={simulateDrive} className="nav-sim-btn">{t('map_nav_sim_start', lang)}</button>
           <button onClick={stopNavigation} className="nav-stop-btn">{t('map_nav_stop', lang)}</button>
         </div>
@@ -2248,6 +2413,8 @@ function RoutePlannerPage({ theme }: { theme: 'light' | 'dark' }) {
       mapTypeControl: false,
       streetViewControl: false,
       fullscreenControl: false,
+      mapTypeId: 'roadmap',
+      backgroundColor: theme === 'dark' ? '#0f172a' : '#f8fafc',
       styles: theme === 'dark' ? GOOGLE_MAPS_DARK_STYLE : [],
     });
     mapRef.current = map;
@@ -2319,7 +2486,7 @@ function RoutePlannerPage({ theme }: { theme: 'light' | 'dark' }) {
       const distText = originCoords ? kmBetween(originCoords[0], originCoords[1], s.lat, s.lng).toFixed(1) + ' km' : '';
       const marker = new google.maps.Marker({
         position: { lat: s.lat, lng: s.lng }, map: mapRef.current,
-        icon: { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), scaledSize: new google.maps.Size(32, 42), anchor: new google.maps.Point(16, 40) }
+        icon: { url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg), size: new google.maps.Size(32, 42), scaledSize: new google.maps.Size(32, 42), anchor: new google.maps.Point(16, 40) }
       });
       const info = new google.maps.InfoWindow({
         content: `<div style="color:#000;min-width:200px;font-family:Inter,sans-serif"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><strong style="font-size:13px">${s.name}</strong>${distText ? `<span style="background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">${distText}</span>` : ''}</div><div style="font-size:11px;color:#666;margin-bottom:4px">${s.brand} • ${s.city}</div><div style="font-size:11px;color:#888;margin-bottom:6px">${s.socketCount} soket • Max ${s.maxPower} kW</div><a href="/map?id=${s.id}&nav=true" style="display:block;text-align:center;padding:7px;background:#2dd4bf;color:#000;border-radius:6px;font-weight:600;font-size:12px;text-decoration:none">Navigasyonu Başlat</a></div>`

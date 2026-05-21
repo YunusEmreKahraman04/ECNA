@@ -339,7 +339,7 @@ async function geocodePhoton(query) {
     const res = await fetch(url, {
       headers: {
         'Accept': 'application/json',
-        'User-Agent': 'ev-charge-atlas-geocoder/1.0 (contact: demo@lumacharge.io)',
+        'User-Agent': 'ev-charge-atlas-geocoder/1.0 (contact: info@ecna.com.tr)',
       },
     });
 
@@ -382,7 +382,7 @@ async function geocodeNominatim(query) {
     const res = await fetch(url, {
       headers: {
         'Accept': 'application/json',
-        'User-Agent': 'ev-charge-atlas-geocoder/1.0 (contact: demo@lumacharge.io)',
+        'User-Agent': 'ev-charge-atlas-geocoder/1.0 (contact: info@ecna.com.tr)',
       },
     });
 
